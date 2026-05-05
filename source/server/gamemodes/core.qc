@@ -203,6 +203,7 @@ void(entity attacker, float death_style) Gamemode_DieHandler =
 {
     switch(current_gamemode) {
         case GAMEMODE_STICKSNSTONES: Gamemode_Sticks_DieHandler(attacker, death_style); break;
+        case GAMEMODE_GUNGAME: Gamemode_GunGame_DieHandler(attacker, death_style); break;
         default: break;
     }
 };
