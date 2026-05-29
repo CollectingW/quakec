@@ -26,7 +26,7 @@ var struct
     {
         "TANK DEMPSEY",
         "VERRUCKT",
-        "portait_0.tga",
+        "portrait_0.tga",
         [0, 0],
         {
             "Great American Hero: Tank Dempsey is a legend among men. Rigid",
