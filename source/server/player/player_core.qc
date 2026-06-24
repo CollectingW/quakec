@@ -852,11 +852,14 @@ void() PlayerPostThink =
 		return;
 
 #ifndef FTE
-	// Town lava floor burns the player: 5 HP/sec + flame SFX while standing on it
-	// (isonlava is a quakespasm/Switch engine builtin #511; not available on FTE)
-	if (!self.downed && self.health > 0 && isonlava(self.origin))
+	// Town lava floor burns the player: 5 HP/sec + flame SFX while standing on it.
+	// Pass the FEET point (bbox bottom) so it only triggers when actually on the lava
+	// plane, not when above it on stairs/platforms. isonlava = engine builtin #511 (no FTE).
+	if (!self.downed && self.health > 0)
 	{
-		if (self.lava_dmg_time < time)
+		vector lava_feet = self.origin;
+		lava_feet_z = self.absmin_z;
+		if (isonlava(lava_feet) && self.lava_dmg_time < time)
 		{
 			self.lava_dmg_time = time + 1;
 			Sound_PlaySound(self, "sounds/weapons/m2flame/flamethrower.wav", SOUND_TYPE_ENV_OBJECT, SOUND_PRIORITY_PLAYALWAYS);

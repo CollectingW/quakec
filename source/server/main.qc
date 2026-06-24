@@ -268,6 +268,7 @@ void() precaches =
 	precache_sound("sounds/player/jump.wav");
 	precache_sound("sounds/player/land.wav");
 	precache_sound("sounds/player/pain4.wav");
+	precache_sound("sounds/weapons/m2flame/flamethrower.wav");	// lava burn damage (Town)
 
 	// weapons
 	precache_sound("sounds/weapons/colt/magin.wav");
