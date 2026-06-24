@@ -3,6 +3,8 @@ on: [push, pull_request]
 jobs:
   Compile-QC:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
     steps:
       - name: Install Python and Libraries
