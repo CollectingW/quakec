@@ -32,6 +32,7 @@ chat.qc
 view_model.qc
 particles.qc
 chasecam.qc
+grenade_trajectory.qc
 zombie.qc
 main.qc
 #endlist

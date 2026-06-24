@@ -49,6 +49,55 @@ float() Gamemode_IsPartyMode =
     return false;
 };
 
+// Gamemode_AllowsRandom(mode): which base modes the "Random" twist can layer onto.
+// Excludes modes that already control the loadout (Gun Game, Sticks & Stones, Wild West).
+float(float mode) Gamemode_AllowsRandom =
+{
+    switch(mode) {
+        case GAMEMODE_CLASSIC:   return TRUE;
+        case GAMEMODE_HARDCORE:  return TRUE;
+        case GAMEMODE_FESTIVE:   return TRUE;
+        case GAMEMODE_HARDPOINT: return TRUE;
+        default: return FALSE;
+    }
+};
+
+// Gamemode_RandomActive(): TRUE when Random's effects apply -- either the base mode
+// IS Random, or sv_random_mix is on and the base mode allows being mixed.
+//
+// MIX: bitmask sv_gamemode_mix combines compatible twists onto a Classic base.
+#define GMMIX_CRANKED   1
+#define GMMIX_HARDPOINT 2
+#define GMMIX_RANDOM    4
+#define GMMIX_FESTIVE   8
+
+float(float bit) Gamemode_MixHas =
+{
+    return (cvar("sv_gamemode_mix") & bit) != 0;
+};
+
+// TRUE when Cranked's mechanics apply: base mode IS Cranked, or it's in the mix.
+float() Gamemode_CrankedActive =
+{
+    if (cvar("sv_gamemode") == GAMEMODE_CRANKED)
+        return TRUE;
+    if (Gamemode_MixHas(GMMIX_CRANKED))
+        return TRUE;
+    return FALSE;
+};
+
+float() Gamemode_RandomActive =
+{
+    float gm = cvar("sv_gamemode");
+    if (gm == GAMEMODE_RANDOM)
+        return TRUE;
+    if (cvar("sv_random_mix") != 0 && Gamemode_AllowsRandom(gm))
+        return TRUE;
+    if (Gamemode_MixHas(GMMIX_RANDOM))
+        return TRUE;
+    return FALSE;
+};
+
 //
 // Gamemode_Init()
 // Called at server spawn, runs the relevant
@@ -65,8 +114,24 @@ void() Gamemode_Init =
         case GAMEMODE_STICKSNSTONES: Gamemode_Sticks_Init(); break;
         case GAMEMODE_WILDWEST: Gamemode_WW_Init(); break;
         case GAMEMODE_FESTIVE: Gamemode_Festive_Init(); break;
+        case GAMEMODE_RANDOM: Gamemode_Random_Init(); break;
+        case GAMEMODE_HARDPOINT: Gamemode_Hardpoint_Init(); break;
+        case GAMEMODE_CRANKED: Gamemode_Cranked_Init(); break;
+        case GAMEMODE_SKULLBALL: Gamemode_SkullBall_Init(); break;
         default: error("Received unrecognized gamemode."); break;
     }
+
+    // Layer Random on top of a compatible base mode -- precache its pools too.
+    if (current_gamemode != GAMEMODE_RANDOM && Gamemode_RandomActive())
+        Gamemode_Random_Init();
+
+    // MIX: layer compatible twists onto the base.
+    if (current_gamemode != GAMEMODE_CRANKED && Gamemode_MixHas(GMMIX_CRANKED))
+        Gamemode_Cranked_Init();
+    if (current_gamemode != GAMEMODE_HARDPOINT && Gamemode_MixHas(GMMIX_HARDPOINT))
+        Gamemode_Hardpoint_Init();
+    if (current_gamemode != GAMEMODE_FESTIVE && Gamemode_MixHas(GMMIX_FESTIVE))
+        Gamemode_Festive_Init();
 };
 
 //
@@ -76,6 +141,8 @@ void() Gamemode_Init =
 //
 void() Gamemode_Frame =
 {
+    current_gamemode = cvar("sv_gamemode");
+
     switch(current_gamemode) {
         case GAMEMODE_CLASSIC: break;
         case GAMEMODE_GUNGAME: Gamemode_GunGame_Frame(); break;
@@ -83,8 +150,20 @@ void() Gamemode_Frame =
         case GAMEMODE_STICKSNSTONES: Gamemode_Sticks_Frame(); break;
         case GAMEMODE_WILDWEST: Gamemode_WW_Frame(); break;
         case GAMEMODE_FESTIVE: Gamemode_Festive_Frame(); break;
+        case GAMEMODE_RANDOM: break;
+        case GAMEMODE_HARDPOINT: Gamemode_Hardpoint_Frame(); break;
+        case GAMEMODE_CRANKED: Gamemode_Cranked_Frame(); break;
+        case GAMEMODE_SKULLBALL: Gamemode_SkullBall_Frame(); break;
         default: error("Received unrecognized gamemode."); break;
     }
+
+    // MIX: run layered twist frames
+    if (current_gamemode != GAMEMODE_CRANKED && Gamemode_MixHas(GMMIX_CRANKED))
+        Gamemode_Cranked_Frame();
+    if (current_gamemode != GAMEMODE_HARDPOINT && Gamemode_MixHas(GMMIX_HARDPOINT))
+        Gamemode_Hardpoint_Frame();
+    if (current_gamemode != GAMEMODE_FESTIVE && Gamemode_MixHas(GMMIX_FESTIVE))
+        Gamemode_Festive_Frame();
 
     // Party mode music
     if (Gamemode_IsPartyMode()) {
@@ -111,8 +190,24 @@ void() Gamemode_PlayerSpawn =
         case GAMEMODE_STICKSNSTONES: Gamemode_Sticks_PlayerSpawn(); break;
         case GAMEMODE_WILDWEST: Gamemode_WW_PlayerSpawn(); break;
         case GAMEMODE_FESTIVE: Gamemode_Festive_PlayerSpawn(); break;
+        case GAMEMODE_RANDOM: Gamemode_Random_PlayerSpawn(); break;
+        case GAMEMODE_HARDPOINT: break;
+        case GAMEMODE_CRANKED: Gamemode_Cranked_PlayerSpawn(); break;
+        case GAMEMODE_SKULLBALL: Gamemode_SkullBall_PlayerSpawn(); break;
         default: error("Received unrecognized gamemode."); break;
     }
+
+    // Layer Random's starting gun on top of a compatible base mode (after the
+    // base spawn so the random weapon wins).
+    if (current_gamemode != GAMEMODE_RANDOM && Gamemode_RandomActive()) {
+        Gamemode_Random_PlayerSpawn();
+    }
+
+    // MIX: layer Cranked's spawn setup
+    if (current_gamemode != GAMEMODE_CRANKED && Gamemode_MixHas(GMMIX_CRANKED))
+        Gamemode_Cranked_PlayerSpawn();
+    if (current_gamemode != GAMEMODE_FESTIVE && Gamemode_MixHas(GMMIX_FESTIVE))
+        Gamemode_Festive_PlayerSpawn();
 };
 
 //
@@ -125,8 +220,13 @@ void() Gamemode_PlayerPostThink =
     switch(current_gamemode) {
         case GAMEMODE_CLASSIC: break;
         case GAMEMODE_GUNGAME: Gamemode_GunGame_PlayerPostThink(); break;
+        case GAMEMODE_CRANKED: Gamemode_Cranked_PlayerPostThink(); break;
         default: break;
     }
+
+    // MIX: layer Cranked's post-think (meltdown/timer)
+    if (current_gamemode != GAMEMODE_CRANKED && Gamemode_MixHas(GMMIX_CRANKED))
+        Gamemode_Cranked_PlayerPostThink();
 };
 
 //
@@ -155,6 +255,9 @@ float(float current_earned_score, float damage_style) Gamemode_ScoreForDamage =
         default: break;
     }
 
+    if (current_gamemode != GAMEMODE_FESTIVE && Gamemode_MixHas(GMMIX_FESTIVE))
+        return Gamemode_Festive_ScoreForDamage(current_earned_score, damage_style);
+
     return current_earned_score;
 };
 
@@ -182,8 +285,11 @@ float(float weapon, float ammo) Gamemode_GetWeaponAmmo =
     switch(current_gamemode) {
         case GAMEMODE_HARDCORE: return Gamemode_Hardcore_GetWeaponAmmo(weapon, ammo);
         case GAMEMODE_FESTIVE: return Gamemode_Festive_GetWeaponAmmo(weapon, ammo);
-        default: return ammo;
+        default: break;
     }
+
+    if (current_gamemode != GAMEMODE_FESTIVE && Gamemode_MixHas(GMMIX_FESTIVE))
+        return Gamemode_Festive_GetWeaponAmmo(weapon, ammo);
 
     return ammo;
 };
@@ -193,8 +299,11 @@ float(float damage, float weapon_id, float weapon_tier) Gamemode_GetWeaponDamage
     switch(current_gamemode) {
         case GAMEMODE_WILDWEST: return Gamemode_WW_GetWeaponDamage(damage, weapon_id, weapon_tier);
         case GAMEMODE_FESTIVE: return Gamemode_Festive_GetWeaponDamage(damage, weapon_id, weapon_tier);
-        default: return damage;
+        default: break;
     }
+
+    if (current_gamemode != GAMEMODE_FESTIVE && Gamemode_MixHas(GMMIX_FESTIVE))
+        return Gamemode_Festive_GetWeaponDamage(damage, weapon_id, weapon_tier);
 
     return damage;
 };
@@ -204,8 +313,13 @@ void(entity attacker, float death_style) Gamemode_DieHandler =
     switch(current_gamemode) {
         case GAMEMODE_STICKSNSTONES: Gamemode_Sticks_DieHandler(attacker, death_style); break;
         case GAMEMODE_GUNGAME: Gamemode_GunGame_DieHandler(attacker, death_style); break;
+        case GAMEMODE_CRANKED: Gamemode_Cranked_DieHandler(attacker, death_style); break;
         default: break;
     }
+
+    // MIX: layer Cranked's kill handler (level up / clear meltdown)
+    if (current_gamemode != GAMEMODE_CRANKED && Gamemode_MixHas(GMMIX_CRANKED))
+        Gamemode_Cranked_DieHandler(attacker, death_style);
 };
 
 void(entity client) Gamemode_DrinkPerk =
@@ -246,6 +360,8 @@ float(float current_count, float current_round, float round_type, float current_
 {
     switch(current_gamemode) {
         case GAMEMODE_FESTIVE: return Gamemode_Festive_GetZombieTotalForRound(current_count, current_round, round_type, current_player_count);
+        case GAMEMODE_CRANKED: return Gamemode_Cranked_GetZombieTotalForRound(current_count, current_round, round_type, current_player_count);
+        case GAMEMODE_SKULLBALL: return Gamemode_SkullBall_GetZombieTotalForRound(current_count, current_round, round_type, current_player_count);
         default: break;
     }
 
@@ -386,6 +502,8 @@ float(float current_delay) Gamemode_GetRoundDelay =
 {
     switch(current_gamemode) {
         case GAMEMODE_FESTIVE: return Gamemode_Festive_GetRoundDelay(current_delay);
+        case GAMEMODE_CRANKED: return Gamemode_Cranked_GetRoundDelay(current_delay);
+        case GAMEMODE_SKULLBALL: return Gamemode_SkullBall_GetRoundDelay(current_delay);
         default: break;
     }
 

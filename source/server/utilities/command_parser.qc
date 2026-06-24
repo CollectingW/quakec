@@ -91,6 +91,22 @@ float(string params) Command_addmoney =
 }
 
 //
+// Command_99999()
+// Debug: gives the player 99999 points.
+//
+float(string params) Command_99999 =
+{
+	// Anti-Cheat in Co-Op.
+	if (player_count > 1 && cheats_have_been_activated == false) {
+		bprint(PRINT_HIGH, "Someone tried to issue 99999 in a Co-Op match. Nice try!\n");
+		return COMMAND_FAILURE;
+	}
+
+	Player_ChangeScore(self, 99999, false);
+	return COMMAND_SUCCESS;
+}
+
+//
 // Command_softrestart()
 // Executes the Soft_Restart QuakeC function.
 // Useful for debugging its functionality.
@@ -241,6 +257,7 @@ var struct {
     string                  command_description;
 } server_commands[] = {
     {"addmoney", Command_addmoney, true, "Usage: addmoney <point_value>\n  Gives `point_value` amount of points to the client who requested it.\n"},
+    {"99999", Command_99999, false, "Gives the player 99999 points.\n"},
     {"give", Command_give, true, "Usage: give <weapon number>\n  Gives `weapon` of index.\n"},
 	{"qc_soft_restart", Command_softrestart, false, "Executes the Soft_Restart QuakeC function. Useful for debugging its functionality.\n"},
 	{"god", Command_godmode, false, "Toggles God Mode.\n"},

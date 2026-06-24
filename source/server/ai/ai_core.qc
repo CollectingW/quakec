@@ -699,7 +699,7 @@ void() NextPathfindToEnemy {
 		self.goalentity = self.enemy;
 		self.chase_time = time + 6;
 	} else {
-		bprint(PRINT_HIGH, "NextPathfind Failure\n");		// this lags like hell
+		//bprint(PRINT_HIGH, "NextPathfind Failure\n");		// silenced -- it lags like hell when a zombie can't path
 	}
 
 #else
@@ -984,3 +984,52 @@ void() AI_RevertEnemySolidState =
 }
 
 #endif // FTE
+
+// AI_SpawnReachable(): door-aware spawn gating -- stops zombies/dogs spawning in
+// rooms whose door isn't bought yet (where they can't path to players).
+#ifndef FTE
+float(entity spawnpt) AI_SpawnReachable =
+{
+	entity pl;
+	float any_player;
+
+	if (spawnpt == world)	// QC && isn't short-circuit; callers can pass world
+		return FALSE;
+
+	// Cheap cache: at most one reachability query per spawn point per second.
+	if (time < spawnpt.ai_wp_cached)
+		return spawnpt.ai_wp;
+
+	// reachable if the engine's door-aware waypoint graph connects this spawn to any
+	// living player. Waypoint_Reachable is side-effect-free (no pathfind slot claimed).
+	spawnpt.ai_wp = FALSE;
+	any_player = FALSE;
+	pl = find(world, classname, "player");
+	while (pl != world) {
+		if (!pl.downed) {
+			any_player = TRUE;
+			if (Waypoint_Reachable(spawnpt, pl)) {
+				spawnpt.ai_wp = TRUE;
+				pl = world; // reachable to this player; done
+			} else {
+				pl = find(pl, classname, "player");
+			}
+		} else {
+			pl = find(pl, classname, "player");
+		}
+	}
+
+	// No living players to anchor to -> don't block spawning.
+	if (!any_player)
+		spawnpt.ai_wp = TRUE;
+
+	spawnpt.ai_wp_cached = time + 1.0;
+	return spawnpt.ai_wp;
+};
+#else
+// FTE build uses waypoints[]/Do_Pathfind directly; allow all spawns (fail open).
+float(entity spawnpt) AI_SpawnReachable =
+{
+	return TRUE;
+};
+#endif

@@ -112,9 +112,6 @@ void() ReturnWeaponModel =
         W_SprintStart();
 
 	W_ShowCrosshair(self);
-
-	// Slight rumble whenever we pull our weapon out again.
-	nzp_rumble(self, 1000, 1200, 75);
 }
 
 void() W_PlayTakeOut =
@@ -134,9 +131,17 @@ void() W_AimIn =
 		return;
 
 	if (IsDualWeapon(self.weapon) ||
-		self.reload_delay > time ||
 		self.knife_delay > time ||
-		self.new_anim_stop) {		
+		self.new_anim_stop) {
+		return;
+	}
+
+	// ADS must NEVER cancel a reload -- you may zoom in and watch it finish but can't
+	// fire until done. Return here so the reload animation keeps playing.
+	if (self.reload_delay > time || self.reload_delay2 > time) {
+		self.zoom = 1;
+		if (WepDef_HasSniperScore(self.weapon))
+			self.scopetime = time + 0.2;
 		return;
 	}
 
@@ -194,6 +199,18 @@ void() W_SprintStop =
 	if (self.isBuying || !self.sprinting)
 		return;
 
+	// stopping a sprint must NOT cancel an in-progress reload: drop the sprint
+	// movement state but leave the reload animation and timers running.
+	if (self.reload_delay > time || self.reload_delay2 > time) {
+		self.zoom = 0;
+		self.sprinting = 0;
+		self.into_sprint = 0;
+		self.sprint_after_reload = false;
+		self.sprint_stop_time = time;
+		self.sprint_duration = self.sprint_timer;
+		return;
+	}
+
 	Weapon_PlayViewModelAnimation(ANIM_SPRINT_STOP, ReturnWeaponModel, 0);
 
 	// Run Walk for a few frames to simulate an ease in velocity
@@ -232,6 +249,15 @@ void W_SprintStart () {
 		self.downed ||
 		!(self.flags & FL_ONGROUND) || 
 		self.sprint_delay > time) {
+		return;
+	}
+
+	// starting a sprint must NOT cancel an in-progress reload: enter the sprint
+	// movement state but keep the reload playing (resumed in WeaponCore_UpdateViewModels).
+	if (self.reload_delay > time || self.reload_delay2 > time) {
+		self.sprint_delay = time + 1;
+		self.sprinting = true;
+		self.sprint_after_reload = true;
 		return;
 	}
 
@@ -324,6 +350,9 @@ void(float side) W_Give_Ammo =
 	} else {
 		self.weapons[0].weapon_magazine += loadammo;
 	}
+
+	// Ammo is now loaded -- from here ADS is allowed to cut the reload short.
+	self.reload_gave_ammo = true;
 };
 
 void () W_LoadAmmo;
@@ -357,6 +386,9 @@ void() ContinueReload = //Special reloads
 		}
 		self.reloadinterupted = FALSE;
 	} else if (self.weapons[0].weapon_magazine < getWeaponMag(self.weapon)) {
+		// A shell/round is being chambered this step -- ammo has been loaded, so
+		// ADS is now allowed to cut the reload short.
+		self.reload_gave_ammo = true;
 		if (self.weapon == W_KAR_SCOPE || self.weapon == W_HEADCRACKER) {
 			self.weapons[0].weapon_magazine++;
         	self.weapons[0].weapon_reserve = self.weapons[0].weapon_reserve - 1;
@@ -380,7 +412,7 @@ void() ContinueReload = //Special reloads
 	}
 
 	if (delay) {
-		if (self.perks & P_SPEED) {
+		if (self.perks & P_SPEED || Cranked_FastReload()) {
 			delay *= 0.5;
 		}
 		self.reload_delay = time + delay;
@@ -398,7 +430,7 @@ void(float side) W_AdvanceAnim =
 	delay = getWeaponDelay(self.weapon, RELOAD);
 	reloadcancelframe = GetFrame(self.weapon, RELOAD_CANCEL);
 	
-	if (self.perks & P_SPEED) delay *= 0.5;
+	if (self.perks & P_SPEED || Cranked_FastReload()) delay *= 0.5;
 
 	modelname = GetWeaponModel(self.weapon, 0);
 
@@ -442,9 +474,40 @@ void(float side) W_Reload =
 	self.zoom = false;
 	self.weapon_autoreload_pending = false;
 	self.weapon2_autoreload_pending = false;
+	self.reload_gave_ammo = false; // ammo not loaded yet this reload
+
+	// "Never Too Low": count reloads toward unlocking Scavenger (100 reloads).
+	// Only on S_RIGHT so dual-wields count once; reload_delay guards stop farming.
+	if (side == S_RIGHT) {
+		float nzp_rl = cvar("nzp_reloads") + 1;
+		cvar_set("nzp_reloads", ftos(nzp_rl));
+
+		// "Never Too Low" achievement at 100 reloads -> unlocks Scavenger.
+		if (nzp_rl == 100) {
+			GiveAchievement(14, self);
+			centerprint(self, "Never Too Low unlocked!\nScavenger ready in Loadout.");
+		} else if (nzp_rl < 100 && nzp_rl == floor(nzp_rl / 10) * 10) {
+			// every 10 reloads, flash progress toward unlocking Scavenger
+			centerprint(self, strcat(strcat("Never Too Low: ", ftos(nzp_rl)), "/100"));
+		}
+
+		// Scavenger LEVELS on total reloads: 200 -> Lv2, 400 -> Lv3, 600 -> Pro.
+		float oldlvl = cvar("nzp_scav_level");
+		if (oldlvl < 1) oldlvl = 1;
+		float newlvl = 1;
+		if (nzp_rl >= 600) newlvl = 4;
+		else if (nzp_rl >= 400) newlvl = 3;
+		else if (nzp_rl >= 200) newlvl = 2;
+		// only announce a REAL upgrade (to Lv2+)
+		if (newlvl > oldlvl && newlvl >= 2) {
+			cvar_set("nzp_scav_level", ftos(newlvl));
+			centerprint(self, strcat("Perk upgraded:\n", Scavenger_LevelName(newlvl)));
+		}
+	}
 
 	W_AimOut();
-	W_SprintStop();
+	// don't stop the sprint -- allow reloading while running.
+	//W_SprintStop();
 
 	// If it's a dual wielded weapon, we don't want to hide the crosshair
 	// unless both weapons are being reloaded.
@@ -514,9 +577,9 @@ void(float side) W_Reload =
 			endanimfunc = W_Give_Ammo;
 		}
 
-		if (self.perks & P_SPEED)
+		if (self.perks & P_SPEED || Cranked_FastReload())
 			delay = delay*0.5;
-		
+
 		if (side == S_RIGHT) {
 			self.reload_delay = delay + time;
 		} else {
@@ -585,9 +648,9 @@ void () W_LoadAmmo =
 
 	if (delay) {
 
-		if (self.perks & P_DOUBLE)
+		if (self.perks & P_DOUBLE || Cranked_FastFire())
 			delay *= 0.66;
-			
+
 		Set_W_Frame (startframe, endframe, delay, reloadcancelframe, FIRE, W_LoadAmmoDone, modelname, false, S_RIGHT, false);
 		self.fire_delay = delay + time;
 	}
@@ -916,18 +979,115 @@ void (float shotcount, float sprd, float Damage, float side) FireTrace =
 	float count, r, ru, penetration_times, do_break;
 	vector dir, src, trace_start_org;
 	entity hitent;
-	
+	vector target_point;
+	float is_thirdperson;
+	vector cam_pos, cam_forward, cam_right, cam_up;
+	vector eye_org;
+	float back_val, up_val, right_val;
+
 	count = 0;
-	
+
 	makevectors(self.v_angle);
-	
+
 	src = self.origin + self.view_ofs;
-	
+	eye_org = src;
+
+#ifdef FTE
+	// When leaning, shift the bullet trace origin to match the client camera
+	// position so that bullets go exactly where the crosshair points.
+	if (self.current_lean != 0) {
+		vector lean_yaw = '0 0 0';
+		lean_yaw_y = self.v_angle_y;
+		makevectors(lean_yaw);
+		vector lean_shift = v_right * (self.current_lean * 20);
+		vector lean_dest = src + lean_shift;
+		traceline(src, lean_dest, MOVE_NOMONSTERS, self);
+		if (trace_fraction < 1.0) {
+			vector clipped = trace_endpos - src;
+			src = src + (vlen(clipped) > 2 ? clipped - normalize(lean_shift) * 2 : '0 0 0');
+		} else {
+			src = lean_dest;
+		}
+		// Restore full-angle vectors for bullet direction and spread.
+		makevectors(self.v_angle);
+	}
+#endif // FTE
+
+#ifndef FTE
+	// Switch corner-peek: button1 signals a first-person lean (5=right, 6=left).
+	// Shift the bullet origin to the leaned eye so bullets hit the crosshair.
+	if (self.button1 == 5 || self.button1 == 6) {
+		vector lean_yaw = '0 0 0';
+		lean_yaw_y = self.v_angle_y;
+		makevectors(lean_yaw);
+		src = src + v_right * ((self.button1 == 5) ? 32 : -32);
+		eye_org = src;
+		makevectors(self.v_angle);
+	}
+#endif // !FTE
+
+	// third-person aiming: trace from the camera to find the crosshair target in
+	// world space. Skipped when a sniper/R3 has forced true first-person view.
+	is_thirdperson = (self.button1 == 1 || self.button1 == 2); // 5/6 are first-person lean, not third-person
+	if (is_thirdperson) {
+		// Replicate camera position calculation from chase.c
+		// Use only YAW for camera orbit (same as engine does)
+		vector cam_angles;
+		cam_angles_x = 0; // Ignore pitch for camera position
+		cam_angles_y = self.v_angle_y;
+		cam_angles_z = 0;
+		makevectors(cam_angles);
+		cam_forward = v_forward;
+		cam_right = v_right;
+		cam_up = v_up;
+
+		// Left shoulder is signalled per-client: button1 == 2 (right == 1).
+		float is_left = (self.button1 == 2) ? 1 : 0;
+
+		// Camera offsets (must match chase.c values)
+		if (self.zoom == 1) { // ADS
+			back_val = 45;
+			up_val = 4;
+			right_val = is_left ? -18 : 22;
+		} else {
+			back_val = 70;
+			up_val = 14;
+			right_val = is_left ? -15 : 18;
+		}
+
+		// Adjust up based on pitch (same as chase.c)
+		up_val = up_val + (self.v_angle_x / 90.0) * 20;
+
+		// Calculate camera position
+		cam_pos = eye_org - cam_forward * back_val + cam_right * right_val;
+		cam_pos_z = cam_pos_z + up_val;
+
+		// Now trace from camera position in the direction camera is looking
+		// Camera looks in player's v_angle direction
+		makevectors(self.v_angle);
+		traceline(cam_pos, cam_pos + v_forward * 4096, FALSE, self);
+		target_point = trace_endpos;
+
+		// Restore v_forward etc for spread calculation
+		makevectors(self.v_angle);
+	} else {
+		target_point = '0 0 0';
+	}
+
 	CL_SendWeaponFire(self, self.weapon);
 
 	while (count < shotcount)
 	{
-		dir = aim (self,0);
+		// third-person: aim from the gun toward the crosshair target. When leaning
+		// in first-person use v_forward directly (aim() would diverge from shifted src).
+		if (is_thirdperson) {
+			dir = normalize(target_point - src);
+		} else if (self.current_lean != 0) {
+			dir = v_forward;
+		} else {
+			dir = aim(self, 0);
+		}
+
 		r = random() * sprd*10;
 		if (random() < 0.5)
 			r = r*-1;
@@ -989,12 +1149,32 @@ void(float side) W_Fire_Burst =
     self.weapon_burst_override = false;
 }
 
+// per-weapon fire rumble, derived from fire type / damage / shot count so each
+// gun feels distinct. low/high are intensities (engine maps 0..2000 -> amp 0..1).
+void() Weapon_FireRumble =
+{
+	float ft = GetFiretype(self.weapon);
+	float dmg = getWeaponDamage(self.weapon, self.weapons[0].weapon_tier);
+	float shots = GetWeaponShotcount(self.weapon);
+	float lo = 600, hi = 800, dur = 55;	// light: pistol / SMG
+
+	if (ft == FIRETYPE_ROCKET || ft == FIRETYPE_GRENADE) { lo = 2000; hi = 1600; dur = 160; }
+	else if (ft == FIRETYPE_RAYBEAM || ft == FIRETYPE_RAYLASER || ft == FIRETYPE_TESLA) { lo = 1200; hi = 1700; dur = 90; }
+	else if (ft == FIRETYPE_FLAME) { lo = 450; hi = 600; dur = 45; }
+	else if (shots >= 6) { lo = 1700; hi = 1200; dur = 110; }		// shotgun thump
+	else if (dmg >= 250 && shots <= 1) { lo = 1600; hi = 1400; dur = 120; }	// sniper punch
+	else if (dmg >= 80) { lo = 1000; hi = 1100; dur = 70; }			// rifle
+
+	nzp_rumble(self, lo, hi, dur);
+};
+
 void(float side) W_Fire =
 {
 	if (GetFiretype(self.weapon) == FIRETYPE_FLAME && self.cooldown)
 		return;
 
-	if (self.dive || self.isBuying)
+	// allow hipfire while dolphin diving (self.dive); only block while buying.
+	if (self.isBuying)
 		return;
 
 	// Prevent the player from spamming the fire button to interrupt a burst.
@@ -1160,6 +1340,9 @@ void(float side) W_Fire =
 		default: break;
 	}
 
+	// one short rumble pulse per actual shot (not per animation/reload sound)
+	Weapon_FireRumble();
+
 	// Play weapon animation and sound
 	if (GetFrame(self.weapon, FIRE_HOLD) == 0) {
 		if (self.zoom && GetFrame(self.weapon, AIM_FIRE_START) != 0) {
@@ -1173,8 +1356,6 @@ void(float side) W_Fire =
 		startframe = endframe = GetFrame(self.weapon, FIRE_HOLD);
 	}
 
-	// Rumble the GamePad a fixed amount when we fire a weapon.
-	nzp_rumble(self, 1400, 2000, 200);
 
 	// Increment the amount of shots fired while downed
 	if (self.downed == true)
@@ -1191,6 +1372,9 @@ void(float side) W_Fire =
 	if (self.perks & P_DOUBLE) {
 		delay *= 0.77;
 	}
+
+	if (Cranked_FastFire())
+		delay *= 0.77;
 
 	// Players shouldn't be allowed to move while firing and prone.
 	if (self.stance == 0) {
@@ -1260,7 +1444,7 @@ void(float side) W_Fire =
 	SetUpdate(self, UT_CROSSHAIR, 5, 0, 0);
 	
 
-	// REFORMAT THIS 
+	// REFORMAT THIS
 #ifndef FTE
 
 	if (side == S_LEFT)
@@ -1268,7 +1452,13 @@ void(float side) W_Fire =
 	else
 		self.Flash_Offset = GetWeaponFlash_Offset(self.weapon);
 
-	self.effects = self.effects | EF_MUZZLEFLASH;
+	// In third-person mode (and not forced first-person), apply flash to the
+	// weapon entity if it exists -- per-client via .button1.
+	if ((self.button1 == 1 || self.button1 == 2) && self.weapon_entity) {
+		self.weapon_entity.effects = self.weapon_entity.effects | EF_MUZZLEFLASH;
+	} else {
+		self.effects = self.effects | EF_MUZZLEFLASH;
+	}
 
 #endif // FTE
 
@@ -1289,10 +1479,13 @@ void() WeaponCore_Melee =
 		return;
 
 	// Do not trigger if we're Aiming down the Sight, or
-	// already melee-ing, or doing some other action.
+	// already melee-ing, diving (dolphin dive), or doing some other action.
 	if (self.knife_delay > time || self.new_anim_stop ||
-	self.new_anim2_stop || self.zoom || in_endgame_sequence)
+	self.new_anim2_stop || self.zoom || in_endgame_sequence || self.dive)
 		return;
+
+	// weaker rumble for a melee swing
+	nzp_rumble(self, 400, 500, 50);
 
 	// Perform the third person animation if standing
 	if (self.stance == PLAYER_STANCE_STAND)
@@ -1480,6 +1673,11 @@ void() W_ThrowGrenade =
 	float startframe;
 	float endframe;
 	local	entity nade;
+	vector throw_dir;
+	vector target_point;
+
+	// Clear the grenade-aiming state (trajectory preview off)
+	self.grenade_aiming = 0;
 
 	W_HideCrosshair(self);
 
@@ -1492,17 +1690,58 @@ void() W_ThrowGrenade =
 		nade.solid = SOLID_BBOX;
 		nade.classname = "grenade";
 
-		// set nade speed	
+		// set nade speed
 
 		makevectors (self.v_angle);
+		throw_dir = v_forward;
 
-		nade.velocity = v_forward*1400;
+		// Third-person camera trajectory adjustment (per-client via .button1;
+		// 0 when forced first-person so grenades throw straight from center).
+		if (self.button1 == 1 || self.button1 == 2) {
+			vector eye_org, cam_pos, cam_forward, cam_right, cam_up;
+			vector cam_angles;
+			float back_val, up_val, right_val;
+			float is_left;
+
+			eye_org = self.origin + self.view_ofs;
+
+			cam_angles_x = self.v_angle_x * 0.5;
+			cam_angles_y = self.v_angle_y;
+			cam_angles_z = 0;
+			makevectors(cam_angles);
+			cam_forward = v_forward;
+			cam_right = v_right;
+			cam_up = v_up;
+
+			is_left = (self.button1 == 2) ? 1 : 0;
+
+			// Camera offsets (must match chase.c values)
+			back_val = 70;
+			up_val = 14;
+			right_val = is_left ? -15 : 18;
+
+			up_val = up_val + (self.v_angle_x / 90.0) * 20;
+
+			cam_pos = eye_org - cam_forward * back_val + cam_right * right_val;
+			cam_pos_z = cam_pos_z + up_val;
+
+			// Trace from camera to find target point
+			makevectors(self.v_angle);
+			traceline(cam_pos, cam_pos + v_forward * 4096, FALSE, self);
+			target_point = trace_endpos;
+
+			// Calculate direction from player position to target
+			throw_dir = normalize(target_point - (self.origin + self.view_ofs));
+			makevectors(self.v_angle);
+		}
+
+		nade.velocity = throw_dir*1400;
 		
 		nade.avelocity = '400 -400 400';
 
 		//nade.angles = vectoangles(nade.velocity);
 		//nade.angles_z += (nade.angles_z + 180 < 360)? 180 : -180;
-		nade.angles = vectoangles(v_forward);
+		nade.angles = vectoangles(throw_dir);
 		nade.angles_z -= 15;
 		// set nade duration
 		nade.nextthink = nade.grenade_delay;
@@ -1512,7 +1751,7 @@ void() W_ThrowGrenade =
 		setmodel (nade, "models/weapons/grenade/g_grenade.mdl");
 		setsize (nade, '0 0 0', '0 0 0');
 		nade.origin = self.origin + self.view_ofs;
-		nade.origin += v_forward * 12;
+		nade.origin += throw_dir * 12;
 		setorigin (nade, nade.origin);
 
 		self.animend = ReturnWeaponModel;
@@ -1574,7 +1813,15 @@ void() W_Grenade =
 	if (game_modifier_can_use_equipment == false)
 		return;
 
+	if (self.zoom) {
+		W_AimOut();
+	}
+
 	if (self.throw_delay > time || self.zoom || self.downed || self.primary_grenades < 1 || self.isBuying)
+		return;
+
+	// Restrict grenade throwing to standing still!
+	if (vlen(self.velocity) > 10)
 		return;
 
 	// Prevent the Player from Sprinting and also avoid issues with
@@ -1587,6 +1834,9 @@ void() W_Grenade =
 	self.primary_grenades -= 1;
 	self.reload_delay2 = self.fire_delay2 = self.throw_delay = self.reload_delay = self.fire_delay = time + 6;
 	self.grenade_delay = time + 5;
+
+	// Signal CSQC that the player is holding a primed grenade (for trajectory preview)
+	self.grenade_aiming = 1;
 
 	nzp_rumble(self, 1000, 1200, 75);
 } 
@@ -1670,6 +1920,16 @@ void() dolphin_dive =		//naievil
 
 	self.dive = 1;
 	W_SprintStop();
+
+	// dolphin diving DOES cancel an in-progress reload (W_SprintStop no longer does).
+	// Only cancel an ACTUAL reload (weapon_anim_type == RELOAD) -- reload_delay is also
+	// a generic post-fire action-lock (e.g. the Kar bolt) we must not clear here.
+	if ((self.reload_delay > time || self.reload_delay2 > time) && self.weapon_anim_type == RELOAD) {
+		self.sprint_after_reload = false;
+		self.NeedLoad = false;
+		Weapon_PlayViewModelAnimation(ANIM_SPRINT_STOP, ReturnWeaponModel, 0);
+	}
+
 	PAnim_EnterDive();
 
 	Sound_PlaySound(self, "sounds/player/jump.wav", SOUND_TYPE_PLAYER_VOICE, SOUND_PRIORITY_PLAYALWAYS);
@@ -1679,13 +1939,26 @@ void() dolphin_dive =		//naievil
 }
 
 
+void() SkullBall_TryThrow;		// gamemodes/skull_ball.qc
+void() SkullBall_ToggleHead;	// gamemodes/skull_ball.qc
+void() MBOX_RejectPull;			// entities/mystery_box.qc
+
 void () Impulse_Functions =
 {
 	if (!self.impulse)
 		return;
-		
+
 	switch (self.impulse)
-	{		
+	{
+		case 44:	// Skull Ball: throw the selected head (L bumper)
+			SkullBall_TryThrow();
+			break;
+		case 46:	// Skull Ball: toggle head standard<->butcher (D-Pad Left)
+			SkullBall_ToggleHead();
+			break;
+		case 35:	// Mystery Box: reject your pull, let teammates grab it (D-Pad Down)
+			MBOX_RejectPull();
+			break;
 		case 10:
 
 #ifdef FTE
@@ -1700,6 +1973,11 @@ void () Impulse_Functions =
 				Player_AddScore(self, 10000, true);
 				rounds += 4;
 			}
+			break;
+		case 200:	// testing: toggle golden M1911
+			self.gold_colt = !self.gold_colt;
+			if (self.weapon == W_COLT)
+				self.weaponmodel = GetWeaponModel(W_COLT, 0);
 			break;
 		case 23:
 
@@ -1933,6 +2211,18 @@ void() WeaponCore_UpdateViewModels =
 	// Checks passed -- update view model animations.
 	W_Frame_Update();
 	W2_Frame_Update();
+
+	// a sprint was deferred while mid-reload; now the reload's finished and the
+	// viewmodel is idle, so resume the sprint loop and lower the gun.
+	if (self.sprint_after_reload &&
+		self.reload_delay <= time && self.reload_delay2 <= time &&
+		self.weapon_anim_type == 0 && !self.new_anim_stop &&
+		self.sprinting && (self.flags & FL_ONGROUND) &&
+		!self.zoom && !self.dive && !self.downed) {
+		self.sprint_after_reload = false;
+		self.zoom = 3;
+		ContinueRun();
+	}
 };
 
 //
@@ -2136,13 +2426,16 @@ void() WeaponCore_GrenadeButtonPressed =
 //
 void() WeaponCore_MeleeButtonPressed =
 {
-	// On platforms with limited control schemes, 
+	// On platforms with limited control schemes,
 	// performing a melee-action while sprinting
 	// triggers Dive-to-Prone.
 #ifndef FTE
 
 	if (self.sprinting) {
 		dolphin_dive();
+		// set SEMIACTION_MELEE so melee doesn't retrigger while the button is held
+		// (dolphin_dive clears self.sprinting, which would otherwise fall through to melee).
+		self.semi_actions |= SEMIACTION_MELEE;
 		return;
 	}
 

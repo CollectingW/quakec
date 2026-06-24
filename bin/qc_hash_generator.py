@@ -1,5 +1,5 @@
 """
-Nazi Zombies: Portable QuakeC CRC generator
+Nazi Zombies: Portable QuakeC CRC generator (Dependency-free version)
 
 Takes input .CSV files and outputs an FTEQCC-compilable
 QuakeC struct with its contents, always assumes the first
@@ -8,23 +8,15 @@ as an entry as well, for collision detection.
 """
 
 import argparse
-import pandas
 import sys
 import os
-from fastcrc import crc16
-from colorama import Fore, Style
+import csv
 from dataclasses import dataclass
 
 args = {}
 struct_fields = []
 original_lengths = []
 original_names = []
-
-COL_BLUE = Fore.BLUE
-COL_RED = Fore.RED
-COL_YEL = Fore.YELLOW
-COL_GREEN = Fore.GREEN
-COL_NONE = Style.RESET_ALL
 
 ITYPE_FLOAT = 0
 ITYPE_STRING = 1
@@ -37,6 +29,18 @@ class StructField:
     '''
     name: str
     item_type: int = ITYPE_FLOAT
+
+def crc16_ibm_3740(data: bytes) -> int:
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= (byte << 8)
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = (crc << 1) ^ 0x1021
+            else:
+                crc = crc << 1
+            crc &= 0xFFFF
+    return crc
 
 def write_qc_file(csv_data):
     '''
@@ -128,25 +132,46 @@ def generate_qc_file(csv_data):
 
 def read_csv_data():
     '''
-    Parses the input_file .CSV into a Pandas dictionary,
-    performs the hashing on the first indexes, and sorts
-    in ascending order.
+    Parses the input_file .CSV, performs the hashing on the first indexes,
+    and sorts in ascending order.
     '''
     global original_lengths, original_names
-    csv_data = pandas.read_csv(args['input_file'])
-
-    # Grab every value and turn the first entry into a hash.
-    for value in csv_data.values:
-        original_lengths.append(len(value[0]))
-        original_names.append(value[0])
-        value[0] = int(crc16.ibm_3740(str.encode(value[0])))
-
-    # Now order everything by ascending order
-    csv_data = csv_data.sort_values(csv_data.columns[0])
-    original_lengths = [original_lengths[i] for i in csv_data.index]
-    original_names = [original_names[i] for i in csv_data.index]
-
-    return csv_data
+    
+    rows = []
+    with open(args['input_file'], mode='r', newline='', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        for row in reader:
+            if not row:
+                continue
+            rows.append(row)
+            
+    processed_rows = []
+    for row in rows:
+        val0 = row[0]
+        original_lengths.append(len(val0))
+        original_names.append(val0)
+        
+        # Calculate crc
+        crc = crc16_ibm_3740(val0.encode('utf-8'))
+        row_copy = list(row)
+        row_copy[0] = crc
+        processed_rows.append(row_copy)
+        
+    # Sort everything by ascending order based on the first column (CRC).
+    zipped = list(zip(processed_rows, original_lengths, original_names))
+    zipped.sort(key=lambda x: x[0][0])
+    
+    sorted_rows = [x[0] for x in zipped]
+    original_lengths = [x[1] for x in zipped]
+    original_names = [x[2] for x in zipped]
+    
+    class PandasLike:
+        def __init__(self, values, columns):
+            self.values = values
+            self.columns = columns
+            
+    return PandasLike(sorted_rows, header)
 
 def fetch_cli_arguments():
     '''
@@ -166,7 +191,7 @@ def main():
     fetch_cli_arguments()
 
     if not os.path.isfile(args['input_file']):
-        print(f'{COL_RED}Error{COL_NONE}: Input .CSV file does not exist. Exiting.')
+        print('Error: Input .CSV file does not exist. Exiting.')
         sys.exit()
 
     csv_data = read_csv_data()

@@ -124,6 +124,9 @@ PU_AddToStruct =
 	// Precache Model and VO
 	precache_model(model_path);
 	precache_sound(voiceover_path_full);
+	// also precache the plain "sounds/pu/" fallback: PU_PlayVO resolves the path by
+	// sv_gamemode at play time, so register both to guarantee the sound exists.
+	precache_sound(strcat("sounds/pu/", voiceover_path));
 
 	// Populate the Struct at Index
 	powerup_array[powerup_count].id = id;

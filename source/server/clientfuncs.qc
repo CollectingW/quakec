@@ -155,6 +155,55 @@ void(float round) FTE_IncrementRound =
 
 #endif // FTE
 
+#ifndef FTE
+// revive icon (no CSQC on Switch): hover a networked billboard sprite over the
+// downed player so every client sees the revive prompt above downed teammates.
+void() ReviveIcon_Follow =
+{
+	// Drop the icon once the owner is no longer a downed player.
+	if (self.owner == world || !self.owner.downed || self.owner.is_spectator
+	|| self.owner.classname != "player") {
+		if (self.owner != world)
+			self.owner.revive_icon_ent = world;
+		remove(self);
+		return;
+	}
+
+	setorigin(self, self.owner.origin + '0 0 42');
+	self.think = ReviveIcon_Follow;
+	self.nextthink = time + 0.05;
+};
+
+void(entity who, string spr) ReviveIcon_Set =
+{
+	if (who == world)
+		return;
+
+	if (who.revive_icon_ent == world) {
+		who.revive_icon_ent = spawn();
+		who.revive_icon_ent.owner = who;
+		who.revive_icon_ent.movetype = MOVETYPE_NONE;
+		who.revive_icon_ent.solid = SOLID_NOT;
+		who.revive_icon_ent.think = ReviveIcon_Follow;
+		who.revive_icon_ent.nextthink = time + 0.05;
+		// EF_HARDPOINT: draw through walls + bypass PVS so teammates always see
+		// where a downed friend is, even through geometry / across the map.
+		who.revive_icon_ent.effects = EF_HARDPOINT;
+	}
+
+	setmodel(who.revive_icon_ent, spr);
+	setorigin(who.revive_icon_ent, who.origin + '0 0 42');
+};
+
+void(entity who) ReviveIcon_Clear =
+{
+	if (who != world && who.revive_icon_ent != world) {
+		remove(who.revive_icon_ent);
+		who.revive_icon_ent = world;
+	}
+};
+#endif // !FTE
+
 void(float player_index, float state) ChangeReviveIconState =
 {
 #ifdef FTE
@@ -165,6 +214,13 @@ void(float player_index, float state) ChangeReviveIconState =
 	WriteByte(MSG_MULTICAST, state);
 	multicast('0 0 0', MULTICAST_ALL);
 
+#else
+	// state 2 = actively being revived (white icon), otherwise the normal icon.
+	entity p = findfloat(world, playernum, player_index);
+	if (state == 2)
+		ReviveIcon_Set(p, "models/sprites/revive_white.spr");
+	else
+		ReviveIcon_Set(p, "models/sprites/revive.spr");
 #endif // FTE
 }
 
@@ -177,6 +233,8 @@ void(float player_index) EnableReviveIcon =
 	WriteByte(MSG_MULTICAST, player_index);
 	multicast('0 0 0', MULTICAST_ALL);
 
+#else
+	ReviveIcon_Set(findfloat(world, playernum, player_index), "models/sprites/revive.spr");
 #endif // FTE
 }
 
@@ -189,6 +247,23 @@ void(float index) DisableReviveIcon =
 	WriteByte(MSG_MULTICAST, index);
 	multicast('0 0 0', MULTICAST_ALL);
 
+#else
+	ReviveIcon_Clear(findfloat(world, playernum, index));
+#endif // FTE
+}
+
+// SendDownedFilter(who, amount): drives the "dying" screen filter on a downed
+// client's view. amount 0-255 (bleed-out progress, 0 = clear). No-op on FTE.
+void(entity who, float amount) SendDownedFilter =
+{
+#ifndef FTE
+	if (who == world)
+		return;
+	if (amount < 0) amount = 0;
+	if (amount > 255) amount = 255;
+	msg_entity = who;
+	WriteByte(MSG_ONE, SVC_DOWNEDFILTER);
+	WriteByte(MSG_ONE, amount);
 #endif // FTE
 }
 
@@ -196,6 +271,11 @@ void(entity who, float weapon) CL_SendWeaponFire =
 {
 	float recoil_return_time = getWeaponRecoilReturn(weapon);
 	vector weapon_recoil = GetWeaponRecoil(weapon);
+
+	// Set server-side punchangle for third-person weapon recoil effect
+	// Scale down since weapon_recoil values are large (35-85 range typically)
+	who.punchangle_x = weapon_recoil_y * -0.02;  // Vertical kick (y in recoil = pitch)
+	who.punchangle_y = weapon_recoil_x * 0.01;   // Horizontal kick
 
 	msg_entity = who;
 
@@ -237,7 +317,8 @@ void(entity who, float death_marker) nzp_hitmarker =
 
 	msg_entity = who;
 	WriteByte(MSG_ONE, SVC_HITMARK);
-		
+	WriteByte(MSG_ONE, death_marker);	// 1 = kill -> engine draws a RED hitmarker
+
 #endif // FTE
 
 };
@@ -485,30 +566,39 @@ void(string chaptertitle, string location, string date, string person, entity wh
 
 void (float achievement_id, optional entity who) GiveAchievement =
 {
-	return;
+	// deliver to a specific player (who), or everyone for a shared achievement.
+	// Switch uses the svc_achievement reliable message; FTE uses its CSQC event.
+#ifdef FTE
 
-	// Achievements have been removed, adding back TBD
-#if 0
-#ifndef FTE
-
-	// temp
-	if (achievement_id > 4)
-		return;
-
-#endif // FTE
-
-	// this is an achievement specific to an individual
 	if ((who && who != world) || player_count == 1) {
 		if (player_count == 1) who = find(world, classname, "player");
 		nzp_achievement(who, achievement_id);
 	} else {
-		entity players;
-		players = find(world, classname, "player");
+		entity players = find(world, classname, "player");
 		while(players != world) {
 			nzp_achievement(players, achievement_id);
 			players = find(players, classname, "player");
 		}
 	}
+
+#else
+
+	if ((who && who != world) || player_count == 1) {
+		if (player_count == 1) who = find(world, classname, "player");
+		if (who == world) return;
+		msg_entity = who;
+		WriteByte(MSG_ONE, SVC_ACHIEVEMENT);
+		WriteByte(MSG_ONE, achievement_id);
+	} else {
+		entity players = find(world, classname, "player");
+		while(players != world) {
+			msg_entity = players;
+			WriteByte(MSG_ONE, SVC_ACHIEVEMENT);
+			WriteByte(MSG_ONE, achievement_id);
+			players = find(players, classname, "player");
+		}
+	}
+
 #endif
 }
 

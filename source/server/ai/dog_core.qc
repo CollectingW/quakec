@@ -134,9 +134,82 @@ void() Dog_Taunt =
 	}
 }
 
+// Dog_Relocate(): anti-softlock failsafe -- teleport a stuck/out-of-bounds dog
+// near its target player so it can be reached & killed (else the dog round never ends).
+void() Dog_Relocate =
+{
+	local entity sp, best;
+	local float d, bestdist, reachable_only;
+	local vector dest;
+	local float guard;
+	local entity fx, tempe;
+
+	if (self.enemy == world || self.enemy.downed || self.enemy.classname != "player")
+		self.enemy = Dog_FindEnemy();
+
+	// no live player to home in on -> nothing sensible to do
+	if (self.enemy == world || self.enemy.classname != "player")
+		return;
+
+	// closest ACTIVE dog spawn to the player (active spawns are only in purchased
+	// areas, so never behind a locked door). Prefer reachable; fall back to nearest.
+	best = world; bestdist = 0;
+	reachable_only = 1;
+	while (1) {
+		sp = find(world, classname, "spawn_dog");
+		while (sp != world) {
+			if (!reachable_only || AI_SpawnReachable(sp)) {
+				d = vlen(sp.origin - self.enemy.origin);
+				if (best == world || d < bestdist) {
+					best = sp;
+					bestdist = d;
+				}
+			}
+			sp = find(sp, classname, "spawn_dog");
+		}
+		if (best != world || reachable_only == 0)
+			break;
+		reachable_only = 0; // second pass: drop the reachability requirement
+	}
+
+	if (best == world)
+		return; // no active spawn at all -> leave it, we'll retry later
+
+	// warp to the spawn, nudged up out of solid if needed
+	dest = best.origin + '0 0 16';
+	guard = 0;
+	while (pointcontents(dest) == CONTENT_SOLID && guard < 128) {
+		dest_z = dest_z + 2;
+		guard = guard + 1;
+	}
+	setorigin(self, dest);
+	self.origin = dest;
+
+	// electricity respawn FX at the new spot (self-removing lightning model + sound)
+	fx = spawn();
+	setmodel(fx, "models/ai/dog_lightning.mdl");
+	setorigin(fx, dest - '0 0 20');
+	tempe = self;
+	self = fx;
+	dog_lightninganim();
+	self = tempe;
+	Sound_PlaySound(world, "sounds/misc/electric_bolt.wav", SOUND_TYPE_ENV_VOICE, SOUND_PRIORITY_PLAYALWAYS);
+}
+
 void() Dog_Think =
 {
 	Dog_Taunt();
+
+	// anti-softlock: once reload_delay (time+30 at spawn) elapses, relocate a dog
+	// still stuck far from its target so the dog round can end. Re-checks periodically.
+	if (time > self.reload_delay) {
+		if (self.enemy == world || self.enemy.downed || self.enemy.classname != "player")
+			self.enemy = Dog_FindEnemy();
+		if (self.enemy != world && self.enemy.classname == "player"
+			&& vlen(self.enemy.origin - self.origin) > 250)
+			Dog_Relocate();
+		self.reload_delay = time + 12;
+	}
 
 	// Hellhounds begin to run whenever their target is in their line of sight.
 	// So perform a tracemove and see if it hits it
@@ -445,7 +518,9 @@ float() spawn_a_dogA =
 			}
 			thing = thing.chain;
 		}
-		if (!pcount && random() < 0.6)
+		// only spawn where the player can actually reach (door-aware reachability,
+		// shared with zombies; see AI_SpawnReachable).
+		if (!pcount && AI_SpawnReachable(lastspawn) && random() < 0.6)
 		{
 			//spawn_a_dogB(lastspawn);
 			spawn_dog_lightning(lastspawn);

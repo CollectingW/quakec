@@ -66,6 +66,9 @@ void(string ent_name) Way_SetBrushEntNonSolid =
 
 //called for each frame that QC runs
 float zombie_cleaned_w;
+void() PerkSelection_Apply; // per-map perk selection (defined in entities/perk_a_cola.qc)
+void() PerkSel_PrecacheAll; // precache all perk assets at load (entities/perk_a_cola.qc)
+float perksel_applied;
 void() StartFrame =
 {
 	framecount = framecount + 1;
@@ -95,6 +98,13 @@ void() StartFrame =
 			Way_SetBrushEntNonSolid("door");
 		}
 		return;
+	}
+
+	// apply the per-map Perk Selection once, after all map entities have
+	// spawned (first normal frame), so the perk machines exist to be reassigned.
+	if (!perksel_applied) {
+		perksel_applied = true;
+		PerkSelection_Apply();
 	}
 
 	// Start completely blacked out
@@ -190,6 +200,11 @@ void() precaches =
 	precache_model ("models/sprites/explosion.spr");
 	precache_model ("models/sprites/null.spr");
 	precache_model ("models/sprites/lightning.spr");
+#ifndef FTE
+	// revive icon is a world sprite over downed players.
+	precache_model ("models/sprites/revive.spr");
+	precache_model ("models/sprites/revive_white.spr");
+#endif
 
 	if (cvar("waypoint_mode")) {
 		precache_model ("models/way/current_way.spr");
@@ -224,17 +239,15 @@ void() precaches =
 	// start weapons
 	precache_model ("models/weapons/m1911/v_colt.mdl");
 	precache_model ("models/weapons/m1911/g_colt.mdl");
+	precache_model ("models/weapons/m1911/v_goldcolt.mdl");
 	precache_model ("models/weapons/knife/v_knife.mdl");
 	precache_model ("models/weapons/grenade/v_grenade.mdl");
 	precache_model ("models/weapons/grenade/g_grenade.mdl");
 	precache_extra (W_BIATCH);
 
-#ifdef FTE
-
-	// FTE only has co-op, so don't precache morphine elsewhere.
+	// morphine revive viewmodel -- must precache on every build or co-op revive
+	// SV_ModelIndex-crashes the host.
 	precache_model ("models/weapons/morphine/v_morphine.mdl");
-
-#endif // FTE
 
 	//
 	// Sounds
@@ -351,6 +364,11 @@ void() precaches =
 	precache_sound("sounds/null.wav");
 }
 
+void() NDU_PlacePerks; // defined in entities/perk_a_cola.qc
+
+// forward decl -- defined later in entities/mg42_turret.qc (included after main.qc)
+void(vector org, float yaw) MG42Turret_Spawn;
+
 //called when map loaded
 void() worldspawn =
 {
@@ -396,6 +414,9 @@ void() worldspawn =
 	clientstat(STAT_GUNGAME_IDX, EV_FLOAT, gungame_weapon_idx);
 	clientstat(STAT_GUNGAME_SCOREGOAL, EV_FLOAT, gungame_score_threshold);
 
+	// Grenade trajectory preview
+	clientstat(STAT_HOLDING_GRENADE, EV_FLOAT, grenade_aiming);
+
 	autocvar(sv_enablechatplugins, 0);
 	autocvar(sv_maprotationbasename, "map_rotation");
 	autocvar(sv_maprotationmode, 0);
@@ -419,6 +440,21 @@ void() worldspawn =
 	LoadWaypointData();
 	Zoning_LoadData();
 	Zoning_SpawnEnts();
+
+	// buyable MG42 auto-turret -- currently a single hardcoded placement on
+	// Kino der Toten (see entities/mg42_turret.qc).
+	if (mapname == "nzp_kinodertoten")
+		MG42Turret_Spawn('-199 1147 -120', 270);	// raised from -157 (barrel was clipping into the podium)
+
+	// ndu ships without perk machines -- perks are placed in the map entity lump
+	// (ndu.bsp) instead, so auto-placement is disabled.
+	// if (mapname == "ndu")
+	//	NDU_PlacePerks();
+
+	// precache every perk model/sound at load so Perk Selection can respawn any
+	// perk at runtime (precache is illegal after ss_loading).
+	if (mapname == "ndu" || mapname == "nzp_kinodertoten" || mapname == "derriese")
+		PerkSel_PrecacheAll();
 
 	//set game elements
 	G_PRONEPOINTS = 0;

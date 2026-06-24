@@ -138,15 +138,34 @@ entity() MBOX_GetFreeEnt =
 //
 float(entity user) MBOX_GetRandomBoxWeapon =
 {
-    float weapon_index = rint((random() * (MAX_BOX_WEAPONS - 1)));
-    float weapon_id = mystery_box_weapons[weapon_index].weapon_id;
-    float weapon_allowed = mystery_box_weapons[weapon_index].allowed && 
-							!mystery_box_weapons[weapon_index].already_obtained;
+    // bounded, not recursive: fixed random tries then linear scan (old version could stack-overflow)
+    float i, weapon_index, weapon_id, ok;
 
-    if (weapon_allowed == true && !Weapon_PlayerHasWeapon(user, weapon_id, true))
-        return weapon_id;
-    else
-        return MBOX_GetRandomBoxWeapon(user);
+    // 1) random tries for an allowed weapon the player doesn't have
+    for (i = 0; i < 64; i = i + 1) {
+        weapon_index = rint((random() * (MAX_BOX_WEAPONS - 1)));
+        weapon_id = mystery_box_weapons[weapon_index].weapon_id;
+        ok = mystery_box_weapons[weapon_index].allowed && !mystery_box_weapons[weapon_index].already_obtained;
+        if (ok && weapon_id != W_NOWEP && !Weapon_PlayerHasWeapon(user, weapon_id, true))
+            return weapon_id;
+    }
+
+    // 2) deterministic scan for an allowed weapon the player doesn't have
+    for (weapon_index = 0; weapon_index < MAX_BOX_WEAPONS; weapon_index = weapon_index + 1) {
+        weapon_id = mystery_box_weapons[weapon_index].weapon_id;
+        ok = mystery_box_weapons[weapon_index].allowed && !mystery_box_weapons[weapon_index].already_obtained;
+        if (ok && weapon_id != W_NOWEP && !Weapon_PlayerHasWeapon(user, weapon_id, true))
+            return weapon_id;
+    }
+
+    // 3) any allowed weapon at all (player may already hold it)
+    for (weapon_index = 0; weapon_index < MAX_BOX_WEAPONS; weapon_index = weapon_index + 1) {
+        if (mystery_box_weapons[weapon_index].allowed && mystery_box_weapons[weapon_index].weapon_id != W_NOWEP)
+            return mystery_box_weapons[weapon_index].weapon_id;
+    }
+
+    // 4) absolute last resort: never crash
+    return W_COLT;
 };
 
 //
@@ -163,6 +182,7 @@ void() Reset_MBox =
 	self = tempe;
 	self.owner.owner = world;
 	self.owner.boxstatus = 0;
+	self.owner.box_free = 0;
 	MBOX_FreeEnt(self);
 }
 
@@ -666,19 +686,106 @@ void() MBOX_UpdatePosessionStatus =
 	}
 }
 
+// BARTERING KING loadout perk: reduces the Mystery Box cost by 25/50/100/150 per
+// level. Unlocks at 10 box buys; levels on box buys (50/100/250).
+float() Loadout_HasBartering =
+{
+	return (cvar("nzp_loadout1") == 2 || cvar("nzp_loadout2") == 2 || cvar("nzp_loadout3") == 2);
+};
+
+float() Bartering_Discount =
+{
+	if (!Loadout_HasBartering())
+		return 0;
+	float lvl = cvar("nzp_barter_level");
+	if (lvl >= 4) return 150;
+	if (lvl == 3) return 100;
+	if (lvl == 2) return 50;
+	return 25;
+};
+
+string(float lvl) Bartering_LevelName =
+{
+	if (lvl >= 4) return "Bartering King Pro";
+	if (lvl == 3) return "Bartering King 3";
+	if (lvl == 2) return "Bartering King 2";
+	return "Bartering King";
+};
+
+// Called on a successful box buy: advance the counter, unlock at 10, level up
+// at 50/100/250, and flash progress every 5 (so it doesn't spam).
+void(entity buyer) Bartering_OnBoxBuy =
+{
+	float buys = cvar("nzp_box_buys") + 1;
+	cvar_set("nzp_box_buys", ftos(buys));
+
+	if (buys == 10) {
+		GiveAchievement(15, buyer);
+		centerprint(buyer, "Bartering King unlocked!\nEquip it in Loadout.");
+	} else if (buys < 10 && buys == floor(buys / 5) * 5) {
+		centerprint(buyer, strcat(strcat("Bartering King: ", ftos(buys)), "/10"));
+	}
+
+	float oldlvl = cvar("nzp_barter_level");
+	if (oldlvl < 1) oldlvl = 1;
+	float newlvl = 1;
+	if (buys >= 250) newlvl = 4;
+	else if (buys >= 100) newlvl = 3;
+	else if (buys >= 50) newlvl = 2;
+	// only announce a REAL upgrade (to Lv2+), never a spurious "upgrade to Lv1"
+	if (newlvl > oldlvl && newlvl >= 2) {
+		cvar_set("nzp_barter_level", ftos(newlvl));
+		centerprint(buyer, strcat("Perk upgraded:\n", Bartering_LevelName(newlvl)));
+	}
+};
+
+// Called when a player presses the reject button (D-Pad Down) while their box
+// pull is floating: opens it up so any teammate can grab it, and tells everyone.
+void() MBOX_RejectPull =
+{
+	if (player_count <= 1)
+		return;	// solo: nobody to share with
+	entity box = find(world, classname, "mystery");
+	while (box != world) {
+		if (box.owner == self && box.boxstatus == 2 && !box.box_free) {
+			box.box_free = 1;
+			// Keep the pull floating & grabbable ~15s so a teammate can run over.
+			if (box.boxweapon != world) {
+				box.boxweapon.velocity = '0 0 0';
+				box.boxweapon.think = Float_Decrease;
+				box.boxweapon.nextthink = time + 15;
+			}
+			Sound_PlaySound(box, "sounds/misc/ching.wav", SOUND_TYPE_ENV_CHING, SOUND_PRIORITY_PLAYALWAYS);
+			bprint(PRINT_HIGH, strcat(self.netname, " is allowing others to grab their mystery box pull!\n"));
+			return;
+		}
+		box = find(box, classname, "mystery");
+	}
+};
+
 void() MBOX_Touch =
 {
 	entity tempe;
-	
+
 	if (other.classname != "player" || other.downed)
 		return;
+
+	// Bartering King: effective price after the loadout discount.
+	float box_price = mystery_box_cost - Bartering_Discount();
+	if (box_price < 0)
+		box_price = 0;
 		
 	if (!self.boxstatus) {
-		Player_UseprintWithWait(other, self, 6, mystery_box_cost, 0);
+		Player_UseprintWithWait(other, self, 6, box_price, 0);
 	}
-	if (self.boxstatus == 2 && self.owner == other) {
+	if (self.boxstatus == 2 && (self.owner == other || self.box_free)) {
 		other.Weapon_Name_Touch = GetWeaponName(self.boxweapon.weapon, -1);
-		Player_UseprintWithWait(other, self, 7, 0, self.boxweapon.weapon);
+		// Owner (before rejecting) sees the grab prompt + "offer to team" hint;
+		// once rejected, ANY player sees the plain grab prompt.
+		if (self.owner == other && !self.box_free && player_count > 1)
+			Player_UseprintWithWait(other, self, 25, 0, self.boxweapon.weapon);
+		else
+			Player_UseprintWithWait(other, self, 7, 0, self.boxweapon.weapon);
 	}
 	
 	if (Player_UseButtonPressed(other, self) && !(other.semi_actions & SEMIACTION_USE))
@@ -686,16 +793,18 @@ void() MBOX_Touch =
 		other.semi_actions |= SEMIACTION_USE;
 		if (!self.boxstatus)
 		{
-			if (other.points >= mystery_box_cost)
-			{					
+			if (other.points >= box_price)
+			{
 				Sound_PlaySound(self, mystery_box_open_sound, SOUND_TYPE_ENV_MUSIC, SOUND_PRIORITY_PLAYALWAYS);
-				Player_RemoveScore(other, mystery_box_cost);
+				Player_RemoveScore(other, box_price);
 				self.boxstatus = 1;
 				self.owner = other;
+				self.box_free = 0;	// fresh pull -- not offered to the team yet
 				MBOX_PlayOpenAnimation();
 				Create_Floating_Weapon();
 				MBOX_UpdatePosessionStatus();
 				self.spins++;
+				Bartering_OnBoxBuy(other);	// Bartering King progression
 			}
 			else {
         		centerprint (other, STR_NOTENOUGHPOINTS);
@@ -704,9 +813,10 @@ void() MBOX_Touch =
 		}
 		if (self.boxstatus == 2)
 		{
-			if (self.owner == other)
+			if (self.owner == other || self.box_free)
 			{
 				other.reload_delay = 0;
+				self.box_free = 0;
 				self.owner = world;
 				Sound_PlaySound(self, "sounds/misc/ching.wav", SOUND_TYPE_ENV_CHING, SOUND_PRIORITY_PLAYALWAYS);
 				tempe = self;
@@ -772,6 +882,10 @@ float MBOX_GetWeaponIDFromMB1(float mbox_id) =
 void() MBOX_PrecacheWeaponContent =
 {
     for (float i = 0; i < MAX_BOX_WEAPONS; i++) {
+        // flamethrower removed -- force it out of the box pool so it's never
+        // precached OR rolled (the roll only picks weapons with allowed == true).
+        if (mystery_box_weapons[i].weapon_id == W_M2)
+            mystery_box_weapons[i].allowed = false;
         if (mystery_box_weapons[i].allowed == true) {
             precache_model(GetWeaponModel(mystery_box_weapons[i].weapon_id, 0));
 		    precache_model(GetWeaponModel(mystery_box_weapons[i].weapon_id, 1));
@@ -825,9 +939,34 @@ float() MBOX_GetUnusedWeaponID =
         }
     }
 
-    error("MBOX_GetunusedWeaponID: Could not find a free weapon slot!\n");
-    return 0;
+    // list full: return W_NOWEP rather than error() (callers skip it)
+    return W_NOWEP;
 }
+
+// MBOX_AllowAllWeapons(): fallback pool -- every box weapon allowed (except Ray Gun
+// Mk II). Used when no box file exists or a parse fails (else the box only gives the Colt).
+void() MBOX_AllowAllWeapons =
+{
+    for (float i = 0; i < MAX_BOX_WEAPONS; i++) {
+        mystery_box_weapons[i].weapon_id = MBOX_GetWeaponIDFromMB1(i);
+        mystery_box_weapons[i].allowed = true;
+        mystery_box_weapons[i].rarity = -1;
+        if (mystery_box_weapons[i].weapon_id == W_RAYMK2)
+            mystery_box_weapons[i].allowed = false;
+    }
+    MBOX_PrecacheWeaponContent();
+};
+
+// MBOX_EnsureNotEmpty(): safety net after a parse -- if nothing is allowed (corrupt
+// file etc.) fall back to all weapons so the box isn't reduced to only the Colt.
+void() MBOX_EnsureNotEmpty =
+{
+    for (float i = 0; i < MAX_BOX_WEAPONS; i++) {
+        if (mystery_box_weapons[i].allowed && mystery_box_weapons[i].weapon_id != W_NOWEP)
+            return;	// at least one real weapon -> fine
+    }
+    MBOX_AllowAllWeapons();
+};
 
 //
 // MBOX_ParseMB2File(mbox_file)
@@ -839,11 +978,15 @@ void(float mbox_file) MBOX_ParseMB2File =
     string file_line;
 
     // Read the first line: It's our "header", should be
-    // "nzp_mbox2".
+    // "nzp_mbox2" or "nzp_mbox2 <version>".
     file_line = strtrim((fgets(mbox_file)));
 
-    if (file_line != "nzp_mbox2")
-        error(strcat("MBOX_ParseMB2File: Expected \"nzp_mbox2\" but got ", file_line));
+    // accept "nzp_mbox2" with optional version; bad header falls back to all weapons (non-fatal)
+    if (file_line != "nzp_mbox2" && substring(file_line, 0, 9) != "nzp_mbox2") {
+        print(strcat(strcat("MBOX_ParseMB2File: bad header, using all weapons: ", file_line), "\n"));
+        MBOX_AllowAllWeapons();		// actually fall back (was just returning -> Colt-only)
+        return;
+    }
 
     // Read each line of the file in a loop
     float finished_parsing = false;
@@ -861,40 +1004,42 @@ void(float mbox_file) MBOX_ParseMB2File =
             break;
         }
 
+        // zone file_line once per iteration so it survives tempstring rotation; exactly one strunzone below
         file_line = strzone(strtrim(file_line));
 
-        // Check for comments, they always start with '#'.
-        // Also ignore whitespace.
-        string first_char = strzone(substring(file_line, 0, 1));
-        if (first_char == "#" || file_line == "") {
+        // Comments (start with '#') and blank lines are skipped.
+        if (file_line == "" || substring(file_line, 0, 1) == "#") {
+            strunzone(file_line);
             continue;
         }
-        strunzone(first_char);
 
         //
         // Actual Content Parsing
         //
-
-        // Retrieving if its an allow or deny list.
         if (parsing_state == 0) {
+            // allow/deny header. Non-fatal: a corrupt line stops parsing and falls
+            // back to "all weapons" instead of aborting the whole map load.
             if (file_line == "allow:")
                 is_allow_not_deny = true;
             else if (file_line == "deny:")
                 is_allow_not_deny = false;
-            else
-                error(strcat("MBOX_ParseMB2File: Not an allow/deny specifier - ", file_line));
-
-            // Now that we know the list, we can begin
-            // parsing the weapons inside of it.
+            else {
+                print(strcat(strcat("MBOX_ParseMB2File: bad allow/deny line: ", file_line), "\n"));
+                strunzone(file_line);
+                MBOX_AllowAllWeapons();		// fall back; RETURN (not break) so the
+                return;						// auto-fill loop below can't run on a full list
+            }
             parsing_state++;
         } else if (parsing_state == 1) {
-            // Get the weapon ID from it's name.
+            // Weapon name -> id. Unknown weapon: warn and skip the line rather
+            // than aborting.
             weapon_id = WepDef_GetWeaponIDFromName(file_line);
+            if (weapon_id == W_NOWEP) {
+                print(strcat(strcat("MBOX_ParseMB2File: unknown weapon, skipping: ", file_line), "\n"));
+                strunzone(file_line);
+                continue;
+            }
 
-            if (weapon_id == W_NOWEP)
-                error(strcat("MBOX_ParseMB2File: Not a weapon - ", file_line));
-
-            // Fill the list with it.
             mystery_box_weapons[weapons_parsed].weapon_id = weapon_id;
             mystery_box_weapons[weapons_parsed].allowed = is_allow_not_deny;
             weapons_parsed++;
@@ -939,6 +1084,7 @@ void() MBOX_LoadData =
     if (mbox_file != -1) {
         MBOX_ParseMB2File(mbox_file);
         fclose(mbox_file);
+        MBOX_EnsureNotEmpty();
 		mystery_box_file_parsed = true;
         return;
     }
@@ -950,6 +1096,7 @@ void() MBOX_LoadData =
     if (mbox_file != -1) {
         MBOX_ParseMB1File(mbox_file);
         fclose(mbox_file);
+        MBOX_EnsureNotEmpty();
 		mystery_box_file_parsed = true;
         return;
     }
@@ -973,6 +1120,91 @@ void() MBOX_LoadData =
     fclose(mbox_file);
 	mystery_box_file_parsed = true;
 }
+
+//
+// NDU Mystery Box morse-code flicker easter egg.
+// The light above the box flickers "THE UNDEAD SHALL KILL US ALL" in morse,
+// pauses ~10s, then repeats; mini-sparks rain down at the START of each message.
+//
+string morse_key;	// keying string of '1' (lit unit) / '0' (dark unit)
+float  morse_built;
+
+void() Morse_BuildKey =
+{
+	if (morse_built) return;
+	// THE UNDEAD SHALL KILL US ALL  ('/' = word gap, ' ' = letter gap)
+	string sym = "- .... ./..- -. -.. . .- -../... .... .- .-.. .-../-.- .. .-.. .-../..- .../.- .-.. .-..";
+	string key = strzone("");
+	float i;
+	for (i = 0; i < strlen(sym); i = i + 1) {
+		string ch = substring(sym, i, 1);
+		string add = "";
+		if (ch == ".") add = "10";			// dot: on 1, gap 1
+		else if (ch == "-") add = "1110";		// dash: on 3, gap 1
+		else if (ch == " ") add = "00";			// letter gap (-> 3 total)
+		else if (ch == "/") add = "000000";		// word gap (-> 7 total)
+		if (add != "") {
+			string nk = strzone(strcat(key, add));
+			strunzone(key);
+			key = nk;
+		}
+	}
+	morse_key = key;
+	morse_built = 1;
+};
+
+void(vector where) MorseLight_Sparks =
+{
+	// small bright sparks flying out + downward, fading on their own (engine particles)
+	particle(where, '0 0 -70', 254, 22);
+	particle(where, '0 0 -50', 110, 14);
+};
+
+float MORSE_UNIT = 0.16;	// seconds per morse time-unit
+float MORSE_PAUSE = 10.0;	// refresher gap between messages
+
+void() MorseLight_Think =
+{
+	self.nextthink = time + 0.04;	// run often; the morse state is derived from elapsed time
+
+	float units = strlen(morse_key);
+	if (units < 1) { self.effects = 0; return; }
+
+	float period = units * MORSE_UNIT + MORSE_PAUSE;
+	float tpos = time - self.delay;
+	float tmod = tpos - floor(tpos / period) * period;	// time within the current cycle
+	float unit = floor(tmod / MORSE_UNIT);
+
+	if (unit >= units) {				// in the pause
+		self.effects = 0;
+		self.cnt = 0;				// re-arm the start-of-message spark
+	} else {
+		if (substring(morse_key, unit, 1) == "1")
+			self.effects = EF_ORANGELIGHT;
+		else
+			self.effects = 0;
+		if (unit == 0 && self.cnt == 0) {	// sparks once, at the message start
+			MorseLight_Sparks(self.origin);
+			self.cnt = 1;
+		}
+	}
+};
+
+void(vector org) MorseLight_Spawn =
+{
+	Morse_BuildKey();
+	entity ml = spawn();
+	ml.classname = "morse_light";
+	setmodel(ml, "models/sprites/null.spr");	// invisible; networked so the client adds the dlight
+	setorigin(ml, org + '0 0 56');
+	ml.movetype = MOVETYPE_NONE;
+	ml.solid = SOLID_NOT;
+	ml.light_lev = 220;
+	ml.cnt = 0;
+	ml.delay = time;
+	ml.think = MorseLight_Think;
+	ml.nextthink = time + 1.5;
+};
 
 void() mystery_box =
 {
@@ -1041,6 +1273,11 @@ void() mystery_box =
 	mystery_box_start_origin = self.origin;
 	mystery_boxes[mystery_box_count] = self;
 	mystery_box_count++;
+
+	// morse easter egg disabled: the NDU box light is a baked style-0 light_spot and
+	// can't be flickered by an additive dlight -- pending a map relight or radio LED.
+	//if (mapname == "ndu")
+	//	MorseLight_Spawn(self.origin);
 
 	self.think = MBOX_AllocateTempEntities;
 	self.nextthink = time + 0.2;

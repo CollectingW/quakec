@@ -789,6 +789,16 @@ void(float pushaway) moveforwardalittle =
 			if(ent.classname == "player" && !ent.downed)
 			{
 				ent.velocity = ent.velocity + (v_forward * 250);
+					// this push runs every hop sub-frame and accumulates (~2000 u/s),
+					// which can fling the player out of bounds -- cap the horizontal speed.
+					local vector hv = ent.velocity;
+					hv_z = 0;
+					if (vlen(hv) > 400)
+					{
+						hv = normalize(hv) * 400;
+						ent.velocity_x = hv_x;
+						ent.velocity_y = hv_y;
+					}
 			}
 			ent = ent.chain;
 		}
@@ -1243,10 +1253,21 @@ void()	zombie_deathC10		=[	$deathC10,		SUB_Null		] 	{if (self.onfire) {Effect_Fi
 
 
 
+void(vector org) SkullBall_OnButcherDeath;	// gamemodes/skull_ball.qc
+
 void(entity ent) Zombie_Death_Cleanup = {
 	// Already dead
 	if(ent.aistatus == "0") {
 		return;
+	}
+
+	// Skull Ball: a slain Butcher drops the golden head. MUST also strip the gold
+	// marker + glow so the recycled edict can't spawn a glowing fake butcher.
+	if (ent.is_butcher) {
+		ent.is_butcher = FALSE;
+		ent.effects = ent.effects - (ent.effects & EF_ORANGELIGHT);
+		ent.light_lev = 0;
+		SkullBall_OnButcherDeath(ent.origin);
 	}
 
 	// Insta-Kill should always cause the head to gib on Zombie death.
@@ -1322,6 +1343,14 @@ float() Zombie_PowerUpDropPercentage =
 
 void() Zombie_Death =
 {
+	// Skull Ball: a freshly-spawned Butcher is invincible -- refuse death (incl.
+	// AI failsafes) and restore its health until the protection window ends.
+	if (self.is_butcher && self.butcher_invuln > time) {
+		self.health = self.head.health = self.butcher_hp;
+		self.deadflag = FALSE;
+		return;
+	}
+
 	Zombie_Death_Cleanup(self);
 	
 	// Death Noises
@@ -1649,20 +1678,37 @@ float() spawn_a_zombieA =
 	// evened out use of the playspace at the beginning of the game but this
 	// isn't standard CoD functionality and it has negative consequences with 
 	// larger areas.
-	entity zombie_spawn;
-	float zombie_spawn_id = rint((random() * (zombie_spawn_points - 1))); // starts at 0!
+	// door-aware: random picks for spread, then first reachable spawn so none spawn behind locked doors
+	entity zombie_spawn = world;
+	entity cand;
+	float tries, zombie_spawn_id;
 
-	zombie_spawn = find(world, classname, "spawn_zombie");
-	while(zombie_spawn != world) {
-		if (zombie_spawn.spawn_id == zombie_spawn_id)
+	for (tries = 0; tries < 8; tries = tries + 1) {
+		zombie_spawn_id = rint((random() * (zombie_spawn_points - 1))); // starts at 0!
+		cand = find(world, classname, "spawn_zombie");
+		while (cand != world && cand.spawn_id != zombie_spawn_id)
+			cand = find(cand, classname, "spawn_zombie");
+		if (cand != world && AI_SpawnReachable(cand)) {
+			zombie_spawn = cand;
 			break;
+		}
+	}
 
-		zombie_spawn = find(zombie_spawn, classname, "spawn_zombie");
+	// Fallback: first reachable spawn anywhere.
+	if (zombie_spawn == world) {
+		cand = find(world, classname, "spawn_zombie");
+		while (cand != world) {
+			if (AI_SpawnReachable(cand)) {
+				zombie_spawn = cand;
+				break;
+			}
+			cand = find(cand, classname, "spawn_zombie");
+		}
 	}
 
 	if (zombie_spawn == world) {
 		if (cvar("developer"))
-			bprint(PRINT_HIGH, "spawn_a_zombieA: No active spawn point exists! Bailing!\n");
+			bprint(PRINT_HIGH, "spawn_a_zombieA: No reachable spawn point exists! Bailing!\n");
 		return false;
 	}
 

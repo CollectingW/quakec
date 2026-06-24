@@ -87,10 +87,7 @@ void () W2_Frame_Update =
 			}
 		}
 
-		if (PlayWeaponSound(self.weapon, self.weapon2_anim_type, FALSE, self.weapon2frame)) {
-			// Slight rumble because we triggered a weapon sound
-			nzp_rumble(self, 1000, 1200, 75);
-		}
+		PlayWeaponSound(self.weapon, self.weapon2_anim_type, FALSE, self.weapon2frame);
 		return;
 	}
 	else
@@ -154,10 +151,7 @@ void () W_Frame_Update =
 			}
 		}
 
-		if (PlayWeaponSound(self.weapon, self.weapon_anim_type, FALSE, self.weaponframe)) {
-			// Slight rumble because we triggered a weapon sound
-			nzp_rumble(self, 1000, 1200, 75);
-		}
+		PlayWeaponSound(self.weapon, self.weapon_anim_type, FALSE, self.weaponframe);
 
 		// FIXME: We need a way to play sounds at specific frames for any viewmodel, not just weapons
 		if (self.weaponmodel == "models/weapons/grenade/v_betty.mdl" && self.weaponframe == 9) {

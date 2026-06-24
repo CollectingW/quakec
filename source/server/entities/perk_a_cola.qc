@@ -254,11 +254,21 @@ void() Perk_MachineGoAway =
 // to all other relevant jumps as well.
 //
 void() touch_perk =
-{  
-	if (other.classname != "player" || other.downed || other.isBuying == true || !PlayerIsLooking(other, self))
-		return;
+{
+    if (other.classname != "player" || other.downed || other.isBuying == true)
+            return;
 
-	// Typically not allowed to purchase Perk-A-Colas while prone.
+    // Loose change: prone directly in front/underneath of unharvested perk machine
+    if (other.stance == PLAYER_STANCE_PRONE && !self.cnt) {
+            self.cnt = 1; // Mark as collected
+            Player_AddScore(other, 100, false);
+            Sound_PlaySound(other, "sounds/misc/ching.wav", SOUND_TYPE_ENV_CHING, SOUND_PRIORITY_PLAYALWAYS);
+    }
+
+    if (!PlayerIsLooking(other, self))
+            return;
+
+    // Typically not allowed to purchase Perk-A-Colas while prone.
 	if (other.stance == PLAYER_STANCE_PRONE && !(self.spawnflags & PERK_SPAWNFLAG_ALLOWPRONE))
 		return;
 
@@ -450,6 +460,10 @@ void() Perk_Jingle =
 //
 void() setup_perk =
 {
+	// Reset the prone "loose change" claim so it's only once per game. This runs
+	// on map load and again on every Soft_Restart (via GameRestart_TurnPerkOff).
+	self.cnt = 0;
+
 	if (cvar("sv_magic") == 0)
 		return;
 
@@ -484,6 +498,10 @@ void() setup_perk =
 // --------------------
 //
 
+// set true while Perk Selection respawns machines at runtime, so
+// Perk_InitMachine skips its (illegal-at-runtime) precache calls.
+float perksel_runtime;
+
 //
 // Perk_InitMachine()
 // Wrapper to provide clean-up for
@@ -496,6 +514,17 @@ float purchase_limit_solo, float purchase_limit_coop,
 float require_power_solo, float require_power_coop,
 float drink_skin, float perk_id) Perk_InitMachine =
 {
+	// "Random" gamemode: rewrite the incoming params so the setup below uses a
+	// random (de-duplicated) perk, and clear self.model/cost so they take effect.
+	if (Random_OverridePerkMachine()) {
+		default_model = random_pick_model;
+		perk_id = random_pick_id;
+		drink_skin = random_pick_skin;
+		self.model = "";
+		self.cost = 0;
+		self.cost2 = 0;
+	}
+
 	//
 	// Set Default Stats for Compatibility
 	//
@@ -548,8 +577,9 @@ float drink_skin, float perk_id) Perk_InitMachine =
 	if (!self.perk_requires_power_coop)
 		self.perk_requires_power_coop = require_power_coop;
 
-	// Precache if spawned naturally by the world.
-	if (time < 2) {
+	// precache only if spawned at map load; Perk Selection respawns machines at
+	// runtime where precache is illegal (PerkSel_PrecacheAll already cached them).
+	if (time < 2 && !perksel_runtime) {
 		precache_model(self.model);
 		precache_model(self.weapon2model);
 
@@ -572,6 +602,18 @@ float drink_skin, float perk_id) Perk_InitMachine =
 	self.nextthink = time + 0.1;
 	self.sequence = drink_skin;
 	self.style = perk_id;
+
+	// the machine is SOLID_TRIGGER (so you can buy/prone), which also lets players
+	// walk through it -- add an invisible solid blocker so they can't clip inside.
+	entity perk_blocker = spawn();
+	perk_blocker.classname = "perk_blocker";
+	perk_blocker.owner = self;
+	perk_blocker.movetype = MOVETYPE_NONE;
+	perk_blocker.solid = SOLID_BBOX;
+	setorigin(perk_blocker, self.origin);
+	// origin sits at ~eye height, so extend the blocker down to the floor (else legs
+	// slip under it and shove the player). Kept inside the ±32 trigger so touch still fires.
+	setsize(perk_blocker, '-26 -26 -72', '26 26 16');
 };
 
 // Quick Revive
@@ -631,6 +673,131 @@ void() perk_mule =
 	Perk_InitMachine("perk_mule", PERK_MULEKICK_DEFAULT_MODEL, 4000, 4000,
 	PERK_SPAWNFLAG_LIMELIGHT, 1000, 1000, true, true, 8, P_MULE);
 }
+
+// NDU_PlacePerks(): ndu ships without perk machines, so spawn the missing ones here
+// (Mule Kick already in the map). Coords are approximate; nudge if a machine clips/floats.
+void(void() perkfunc, vector org, float yaw) NDU_SpawnPerk =
+{
+	entity oldself = self;
+	self = spawn();
+	self.origin = org;   // XY picks the room; Z just needs to be above the floor
+	self.angles = [0, yaw, 0];
+	perkfunc();          // Perk_InitMachine reads self.origin, sets model + size
+
+	// Nacht is multi-level with varying floor heights, so don't trust our Z --
+	// drop the machine straight down onto whatever floor is beneath it.
+	setorigin(self, self.origin);
+#ifdef FTE
+	droptofloor();
+#else
+	droptofloor(0, 0);
+#endif
+	self.oldorigin = self.origin; // keep the machine's "home" in sync after the drop
+	self = oldself;
+};
+
+void() NDU_PlacePerks =
+{
+	// Quick Revive -- spawn room, west side
+	NDU_SpawnPerk(perk_revive,    '1060 1960 88', 0);
+	// Juggernog -- east room (near the 2256 2456 wall-buy)
+	NDU_SpawnPerk(perk_juggernog, '2200 2456 88', 180);
+	// Speed Cola -- north/northeast room (near the 2160 2696 wall-buy)
+	NDU_SpawnPerk(perk_speed,     '2080 2660 88', 270);
+};
+
+// PERK SELECTION -- per-map override of each machine's perk, from archived cvars
+// nzp_psel_<map><slot> (0=Default, 1=None, 2..9=specific perk). ndu/kino/derriese only.
+string perksel_class[8];
+entity perksel_mach[8];
+vector perksel_org[8];
+vector perksel_ang[8];
+float  perksel_valid[8];
+
+// precache every perk's model + assets at map load so Perk Selection can respawn
+// any perk at runtime (where precache is illegal). Call from worldspawn (ss_loading).
+void() PerkSel_PrecacheAll =
+{
+	precache_model(PERK_QUICKREVIVE_DEFAULT_MODEL);
+	precache_model(PERK_JUGGERNOG_DEFAULT_MODEL);
+	precache_model(PERK_SPEEDCOLA_DEFAULT_MODEL);
+	precache_model(PERK_DOUBLETAP_DEFAULT_MODEL);
+	precache_model(PERK_PHDFLOPPER_DEFAULT_MODEL);
+	precache_model(PERK_STAMINUP_DEFAULT_MODEL);
+	precache_model(PERK_DEADSHOT_DEFAULT_MODEL);
+	precache_model(PERK_MULEKICK_DEFAULT_MODEL);
+	precache_model("models/machines/v_perk.mdl");
+	precache_sound("sounds/machines/perk_drink.wav");
+	precache_sound("sounds/machines/vend.wav");
+};
+
+// Spawn a perk machine of the given id at org/ang (mirrors NDU_SpawnPerk).
+void(vector org, vector ang, float id) PerkSel_SpawnPerk =
+{
+	entity oldself = self;
+	self = spawn();
+	self.origin = org;
+	self.angles = ang;
+	self.spawnflags = 0;
+	if (id == 2)      perk_revive();
+	else if (id == 3) perk_juggernog();
+	else if (id == 4) perk_speed();
+	else if (id == 5) perk_double();
+	else if (id == 6) perk_flopper();
+	else if (id == 7) perk_staminup();
+	else if (id == 8) perk_deadshot();
+	else if (id == 9) perk_mule();
+	setorigin(self, org);
+	self.oldorigin = self.origin;
+	self = oldself;
+};
+
+void(string cl0, string cl1, string cl2, string cl3, string cl4, string cl5, string cl6, string cl7, string prefix, float count) PerkSel_ApplyMap =
+{
+	float i, sel;
+
+	perksel_class[0] = cl0; perksel_class[1] = cl1; perksel_class[2] = cl2; perksel_class[3] = cl3;
+	perksel_class[4] = cl4; perksel_class[5] = cl5; perksel_class[6] = cl6; perksel_class[7] = cl7;
+
+	// 1) capture each slot's default machine FIRST (before any change, so a spawned
+	//    replacement can't be mistaken for another slot's original).
+	for (i = 0; i < count; i = i + 1) {
+		perksel_mach[i] = find(world, classname, perksel_class[i]);
+		perksel_valid[i] = (perksel_mach[i] != world);
+		if (perksel_valid[i]) {
+			perksel_org[i] = perksel_mach[i].origin;
+			perksel_ang[i] = perksel_mach[i].angles;
+		}
+	}
+	// 2) remove the overridden machines (any slot that isn't Default).
+	for (i = 0; i < count; i = i + 1) {
+		sel = cvar(strcat(prefix, ftos(i + 1)));
+		if (sel != 0 && perksel_valid[i])
+			remove(perksel_mach[i]);
+	}
+	// 3) spawn the chosen perk for slots set to a specific perk (None just stays gone).
+	//    perksel_runtime tells Perk_InitMachine to skip its illegal-at-runtime precache.
+	perksel_runtime = true;
+	for (i = 0; i < count; i = i + 1) {
+		sel = cvar(strcat(prefix, ftos(i + 1)));
+		if (sel >= 2 && perksel_valid[i])
+			PerkSel_SpawnPerk(perksel_org[i], perksel_ang[i], sel);
+	}
+	perksel_runtime = false;
+};
+
+void() PerkSelection_Apply =
+{
+	if (mapname == "ndu")
+		PerkSel_ApplyMap("perk_revive", "perk_mule", "perk_speed", "perk_juggernog",
+			"", "", "", "", "nzp_psel_ndu", 4);
+	else if (mapname == "nzp_kinodertoten")
+		PerkSel_ApplyMap("perk_revive", "perk_juggernog", "perk_mule", "perk_double", "perk_speed",
+			"", "", "", "nzp_psel_kino", 5);
+	else if (mapname == "derriese")
+		PerkSel_ApplyMap("perk_speed", "perk_double", "perk_flopper", "perk_mule",
+			"perk_deadshot", "perk_juggernog", "perk_revive", "perk_staminup", "nzp_psel_der", 8);
+};
 
 //
 // Random Perk-A-Cola

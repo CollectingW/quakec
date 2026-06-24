@@ -163,7 +163,15 @@ void() W_PrimeBetty =
 	if (game_modifier_can_use_equipment == false)
 		return;
 
+	if (self.zoom) {
+		W_AimOut();
+	}
+
 	if (self.throw_delay > time || self.zoom || self.downed || self.secondary_grenades < 1 || self.isBuying)
+		return;
+
+	// Restrict Bouncing Betty priming to standing still!
+	if (vlen(self.velocity) > 10)
 		return;
 
 	// Prevent the Player from Sprinting and also avoid issues with

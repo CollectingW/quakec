@@ -57,11 +57,11 @@ enum {
     MENU_GAMEPAD,
     MENU_BINDINGS,
     MENU_ACCESSIBILITY,
-    MENU_BIOS,
     MENU_CREDITS,
     MENU_PAUSE,
     MENU_LOBBY,
-    MENU_GAMESETTINGS
+    MENU_GAMESETTINGS,
+    MENU_GAMEMODES
 };
 
 #define MENU_SND_NAVIGATE 	0
@@ -81,10 +81,10 @@ void() Menu_Coop_Join;
 void() Menu_Coop_Browse;
 void() Menu_Coop_Direct;
 void() Menu_Coop_Create;
-void() Menu_Bios;
 void() Menu_Credits;
 void() Menu_Lobby;
 void() Menu_GameSettings;
+void() Menu_Gamemodes;
 
 #else
 
@@ -126,8 +126,8 @@ string(string next_id) Menu_Lobby_GetPreviousButton;
 string(string prev_id) Menu_GameSettings_GetNextButton;
 string(string next_id) Menu_GameSettings_GetPreviousButton;
 
-string(string prev_id) Menu_Bios_GetNextButton;
-string(string next_id) Menu_Bios_GetPreviousButton;
+string(string prev_id) Menu_Gamemodes_GetNextButton;
+string(string next_id) Menu_Gamemodes_GetPreviousButton;
 
 #else
 

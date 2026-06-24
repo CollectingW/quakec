@@ -28,6 +28,7 @@
 #define LASTSTAND_DEATH_TIMER       30
 
 void() W_TakeOut;
+void() ReturnWeaponModel;
 void() Gamemode_LastStand;
 float(float current_max_health, float current_perks) Gamemode_GetMaxHealthForPlayer;
 
@@ -243,9 +244,33 @@ void() LastStand_ReviveTriggerFollow =
     setorigin(self, self.owner.origin);
     self.nextthink = time + 1;
 
+	// a revive trigger must only exist for a downed owner -- self-destruct otherwise
+	// so a stray trigger can't "revive" a healthy teammate and freeze them.
+	if (self.owner == world || self.owner.downed == false) {
+		if (self.owner != world)
+			LastStand_UnlinkRevivee(self.owner);
+		remove(self);
+		return;
+	}
+
+	// catch a stuck revive: if the reviver leaves mid-revive, touch stops firing and the
+	// downed player is un-revivable -- so validate the link here and tear it down if stale.
+	if (self.owner.beingrevived == true) {
+		entity rev = self.owner.firer;
+		if (rev == world || rev.classname != "player" || rev.downed
+		 || rev.button7 == FALSE
+		 || vlen(rev.origin - self.owner.origin) > 100) {
+			LastStand_UnlinkRevivee(self.owner);
+		}
+	}
+
 	// Iterate our death timer if we're not being revived.
 	if (self.owner.beingrevived == false)
     	self.downed++;
+
+	// drive the "dying" screen filter from bleed-out progress (0 -> 255 over
+	// LASTSTAND_DEATH_TIMER); pauses while being revived since downed stops climbing.
+	SendDownedFilter(self.owner, (self.downed * 255) / LASTSTAND_DEATH_TIMER);
 
     if (self.downed >= LASTSTAND_DEATH_TIMER) {
         // Kill our owner.
@@ -263,6 +288,9 @@ void() LastStand_ReviveTriggerFollow =
 //
 void(entity client) LastStand_UnlinkRevivee =
 {
+	if (client == world)
+		return;
+
 	// We can move again.
 	client.speed_penalty = client.speed_penalty_time = 0;
 
@@ -283,7 +311,13 @@ void(entity client) LastStand_UnlinkRevivee =
 		entity old_self = self;
 		self = client.firer;
 
-		// The previous revivee should deploy their active weapon.
+		// force the reviver's viewmodel fully back: the syringe anim left the morphine
+		// model + SPRINT anim; clear anim state, hard-restore the model, clean deploy.
+		self.weapon_anim_type = 0;
+		self.new_anim_stop = false;
+		self.weaponframe = self.weaponframe_end = 0;
+		self.animend = SUB_Null;
+		ReturnWeaponModel();
 		W_TakeOut();
 
 		// We should also reset their progress bar state.
@@ -292,8 +326,10 @@ void(entity client) LastStand_UnlinkRevivee =
 		self = old_self;
 	}
 
-	// We no longer have an active revivee.
-	client.firer.firer = world;
+	// no active revivee now -- guard against client.firer being world, else
+	// "client.firer.firer = world" crashes with "assignment to world entity".
+	if (client.firer != world)
+		client.firer.firer = world;
 	client.firer = world;
 
 	// Revert our revive indicator.
@@ -332,7 +368,8 @@ void(entity downed_client, entity revivee) LastStand_LinkRevivee =
 
 #endif // FTE
 
-	// Initiate an animation for morphine.
+	// play the morphine inject anim; viewmodel is force-restored on revive end
+	// (LastStand_UnlinkRevivee) so it can't get stuck on the morphine model.
 	entity old_self = self;
 	self = revivee;
 	Set_W_Frame (0, 21, 0, 0, SPRINT, SUB_Null, "models/weapons/morphine/v_morphine.mdl", false, S_RIGHT, true);
@@ -346,6 +383,15 @@ void(entity downed_client, entity revivee) LastStand_LinkRevivee =
 //
 void() LastStand_TouchReviveTrigger =
 {
+	// never run revive logic for an owner who isn't downed -- a lingering trigger
+	// would "revive" a healthy teammate, so clear any linkage and remove us.
+	if (self.owner == world || self.owner.downed == false) {
+		if (self.owner != world)
+			LastStand_UnlinkRevivee(self.owner);
+		remove(self);
+		return;
+	}
+
 	// Only trigger for free players, and not ourself.
     if (other.classname != "player" || other == self.owner)
         return;
@@ -368,7 +414,9 @@ void() LastStand_TouchReviveTrigger =
     // No one is actively reviving the downed team mate.
     if (self.owner.beingrevived == false) {
         // Hold F to revive...
-        Player_UseprintWithWait(other, self, 13, 0, 0);
+        // Pass the downed player's index (their playernum) as "cost" so the
+        // engine can show "Revive <name>" instead of a generic prompt.
+        Player_UseprintWithWait(other, self, 13, self.owner.playernum, 0);
 
         // Kick-off the revive sequence.
         if (Player_UseButtonPressed(other, self)) {
@@ -525,6 +573,8 @@ void(entity client) LastStand_Begin =
 	// Spawn Revive Sprite in Co-Op
 	if (player_count > 1) {
 		EnableReviveIcon(self.playernum);
+		// Tell everyone a teammate went down so they know to come revive.
+		bprint(PRINT_HIGH, strcat(self.netname, " is downed!\n"));
 	}
 
 	// Play Last Stand Animation

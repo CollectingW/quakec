@@ -325,7 +325,7 @@ void() Spawns_FillMissing =
     if (spawn_points[SPAWN_PLR_LEGACY] != world) {
         player_spawns[SPAWN_PLR_LEGACY] = true;
         Spawns_SetUpPoint(spawn_points[SPAWN_PLR_LEGACY]);
-        Spawns_DropToFloor(spawn_points[i]);
+        Spawns_DropToFloor(spawn_points[SPAWN_PLR_LEGACY]);
     }
 
     // If there's no player 1 spawn or legacy spawn, crash.

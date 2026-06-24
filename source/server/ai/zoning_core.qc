@@ -608,8 +608,10 @@ void(float zone_file) Zoning_ParseZoneFile =
             h = fgets(zone_file);
             stored_zones[i].name = strzone(strtrim(h));
             // zone id
+            // stof/stov of a trimmed line does NOT need strzone -- the old strzone
+            // here leaked a zoned string every field/map load. Only STORED strings stay zoned.
             h = fgets(zone_file);
-            stored_zones[i].id = stof(strzone(strtrim(h)));
+            stored_zones[i].id = stof(strtrim(h));
             // zone targets
             h = fgets(zone_file);
             stored_zones[i].targets = strzone(strtrim(h));
@@ -618,26 +620,24 @@ void(float zone_file) Zoning_ParseZoneFile =
             stored_zones[i].fog_value = strzone(strtrim(h));
             // number of adjacent zones
             h = fgets(zone_file);
-            stored_zones[i].num_adj_zones = stof(strzone(strtrim(h)));
+            stored_zones[i].num_adj_zones = stof(strtrim(h));
             // adjacent zones id's
             for(float j = 0; j < stored_zones[i].num_adj_zones; j++) {
                 h = fgets(zone_file);
-                stored_zones[i].adj_zone_id[j] = stof(strzone(strtrim(h)));
+                stored_zones[i].adj_zone_id[j] = stof(strtrim(h));
             }
             // number of brushes in this zone
             h = fgets(zone_file);
-            stored_zones[i].num_brushes = stof(strzone(strtrim(h)));
+            stored_zones[i].num_brushes = stof(strtrim(h));
             // all brush mins/maxs
             for (float k = 0; k < stored_zones[i].num_brushes; k++) {
                 h = fgets(zone_file);
-                string brush_mins = strzone(strtrim(h));
-                vector brush_mins_vec = stov(brush_mins);
+                vector brush_mins_vec = stov(strtrim(h));
                 stored_zones[i].brush_mins[k][0] = brush_mins_vec[0];
                 stored_zones[i].brush_mins[k][1] = brush_mins_vec[1];
                 stored_zones[i].brush_mins[k][2] = brush_mins_vec[2];
                 h = fgets(zone_file);
-                string brush_maxs = strzone(strtrim(h));
-                vector brush_maxs_vec = stov(brush_maxs);
+                vector brush_maxs_vec = stov(strtrim(h));
                 stored_zones[i].brush_maxs[k][0] = brush_maxs_vec[0];
                 stored_zones[i].brush_maxs[k][1] = brush_maxs_vec[1];
                 stored_zones[i].brush_maxs[k][2] = brush_maxs_vec[2];
@@ -646,8 +646,7 @@ void(float zone_file) Zoning_ParseZoneFile =
             if (zone_version != "1.0.0") {
                 // number of wayTargets
                 h = fgets(zone_file);
-                string num_way_targets = strzone(strtrim(h));
-                stored_zones[i].num_way_targets = stof(num_way_targets);
+                stored_zones[i].num_way_targets = stof(strtrim(h));
                 // wayTargets in this zone
                 for (float l = 0; l < stored_zones[i].num_way_targets; l++) {
                     h = fgets(zone_file);

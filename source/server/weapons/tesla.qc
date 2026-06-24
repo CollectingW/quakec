@@ -88,6 +88,9 @@ void(entity hit_ent, entity arc_parent, entity arc_owner, float arc_num, float d
         if(arc_owner.classname == "player") {
             arc_owner.kills += 1;
             Player_AddScore(arc_owner, Gamemode_ScoreForDamage(DMG_SCORE_TESLA, DMG_TYPE_TESLA), true);
+            // credit gamemode kill hooks (Cranked, GunGame) -- tesla kills bypass
+            // DamageHandler/DieHandler, so e.g. Cranked never cranks without this.
+            Gamemode_DieHandler(arc_owner, DMG_TYPE_TESLA);
         }
     }
 

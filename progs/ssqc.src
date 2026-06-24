@@ -48,6 +48,7 @@ entities/teleporter.qc
 entities/map_entities.qc
 entities/func.qc
 entities/traps.qc
+entities/mg42_turret.qc
 entities/lights.qc
 entities/pack_a_punch.qc
 entities/mystery_box.qc
@@ -86,6 +87,10 @@ gamemodes/hardcore.qc
 gamemodes/wild_west.qc
 gamemodes/sticks_and_stones.qc
 gamemodes/festive.qc
+gamemodes/random.qc
+gamemodes/hardpoint.qc
+gamemodes/cranked.qc
+gamemodes/skull_ball.qc
 gamemodes/core.qc
 #ifdef QUAKEC_TEST
 tests/test_math.qc

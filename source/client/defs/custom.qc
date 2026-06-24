@@ -173,3 +173,10 @@ float hide_viewmodel;
 vector playerOrigin;
 vector playerOriginOld;
 vector playerVelocity;
+
+// Leaning / Peeking variables
+float lean_state;
+float current_lean;
+float r_bumper_down_time;
+float r_bumper_is_held;
+float r_bumper_grenade_fired;

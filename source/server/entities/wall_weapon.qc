@@ -28,6 +28,19 @@
 
 void() W_PlayTakeOut;
 void(entity client, float weapon) Gamemode_BuyWeapon;
+
+// Bartering King wall discount: 10/15/20/25% off a wall-buy (milder than the box).
+float(float c) Bartering_WallCost =
+{
+	if (cvar("nzp_loadout1") != 2 && cvar("nzp_loadout2") != 2 && cvar("nzp_loadout3") != 2)
+		return c;
+	float blvl = cvar("nzp_barter_level");
+	float disc = 0.10;
+	if (blvl >= 4) disc = 0.25;
+	else if (blvl == 3) disc = 0.20;
+	else if (blvl == 2) disc = 0.15;
+	return floor(c * (1.0 - disc));
+};
 float(float current_cost, float weapon_cost, float weapon_id, float is_upgraded, float weapon_tier) Gamemode_GetCostForWeaponAmmo;
 
 // =================================
@@ -94,6 +107,9 @@ void() WallWeapon_Use =
 //
 void() weapon_wall =
 {
+	// Random: reroll this wall before setup reads self.weapon/self.sequence
+	Random_OverrideWallWeapon();
+
 	// Needed for the Prop
 	precache_sound("sounds/misc/buy.wav");
 
@@ -209,8 +225,13 @@ void () WallWeapon_TouchTrigger =
 			}
 
 			Gamemode_BuyWeapon(other, self.weapon);
+
+			// "Well Aren't You Lucky?": wonder weapon off a Random wall
+			if (Gamemode_RandomActive() &&
+				(self.weapon == W_RAY || self.weapon == W_TESLA || self.weapon == W_RAYMK2))
+				GiveAchievement(16, other);
 		}
-	} else 
+	} else
 	// Universal Ammo buy
 	{
 		other.Weapon_Name_Touch = GetWeaponName(other.weapon, -1);
@@ -255,7 +276,7 @@ void () WallWeapon_TouchTrigger =
 		if (other.grenades & 2)
 			return;
 
-		wcost = floor(self.cost * game_modifier_cost_multiplier);
+		wcost = Bartering_WallCost(floor(self.cost * game_modifier_cost_multiplier));
 
 		Player_UseprintWithWait(other, self, 4, wcost, self.weapon);
 
@@ -352,7 +373,7 @@ void () WallWeapon_TouchTrigger =
 	else if (self.weapon != 99)
 	{
 		entity tempe;
-		wcost = floor(self.cost * game_modifier_cost_multiplier);
+		wcost = Bartering_WallCost(floor(self.cost * game_modifier_cost_multiplier));
 
 		//centerprint(other, self.message);
       	Player_UseprintWithWait(other, self, 4, wcost, self.weapon);
@@ -383,6 +404,11 @@ void () WallWeapon_TouchTrigger =
 		self = tempe;
 
 		Gamemode_BuyWeapon(other, self.weapon);
+
+		// wonder weapon off a Random wall -> "Well Aren't You Lucky?"
+		if (Gamemode_RandomActive() &&
+			(self.weapon == W_RAY || self.weapon == W_TESLA || self.weapon == W_RAYMK2))
+			GiveAchievement(16, other);
 	}
 
 	if (other.ach_tracker_coll == ach_tracker_col2) {
@@ -390,26 +416,56 @@ void () WallWeapon_TouchTrigger =
 	}
 };
 
-//
-// WallWeapon_LinkChalk()
-// Creates a proper entity link between the Trigger
-// and the Chalk the mapper targeted it towards.
-//
+// Random: reskin the nearest unclaimed gun place_model to match a chalk-less wall buy (.cnt = claimed)
+void(entity trig, float w) WallWeapon_ReskinGunProp =
+{
+	vector center = (trig.absmin + trig.absmax) * 0.5;
+	entity best = world;
+	float bestdist = 100000;
+
+	entity e = find(world, classname, "place_model");
+	while (e != world) {
+		if (!e.cnt && substring(e.model, 0, 15) == "models/weapons/") {
+			float d = vlen(e.origin - center);
+			if (d < bestdist) {
+				bestdist = d;
+				best = e;
+			}
+		}
+		e = find(e, classname, "place_model");
+	}
+
+	if (best != world) {
+		best.cnt = 1;	// claim so no two triggers grab the same prop
+		setmodel(best, GetWeaponModel(w, 1));
+		best.frame = 0;
+	}
+};
+
 void() WallWeapon_LinkChalk =
 {
 	entity ent;
-	
+
 	ent = find (world, targetname, self.target);
-	
+
 	if (ent.classname == "weapon_wall") {
 		self.enemy = ent;
+		// Random: grant the chalk's rerolled weapon, not the original
+		if (Gamemode_RandomActive())
+			self.weapon = ent.weapon;
 		self.mins = self.enemy.mins;
 		self.maxs = self.enemy.maxs;
 		self.origin = self.enemy.origin;
 		setsize(self, self.mins, self.maxs);
 		setorigin(self, self.origin);
 	}
-	    
+	else if (Gamemode_RandomActive()) {
+		// chalk-less map: reroll and reskin the nearest gun prop
+		float w = Random_RollWallWeapon();
+		self.weapon = w;
+		WallWeapon_ReskinGunProp(self, w);
+	}
+
 }
 
 //

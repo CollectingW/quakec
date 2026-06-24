@@ -134,6 +134,8 @@ void(string perk_classname) GameRestart_TurnPerkOff =
 		tempe.velocity = '0 0 0';
 		tempe.touch = touch_perk;
 		tempe.perk_purchase_count = 0;
+		// .cnt (prone "loose change" claim) is reset in setup_perk, which this
+		// re-runs via tempe.think below (.cnt isn't in scope in this file).
 		// angles are already set
 
 		// Run our initial setup function
@@ -283,6 +285,13 @@ void() GameRestart_OpenClosedDoors =
 		func_door_nzp();
 		self = temp_ent;
 
+#ifndef FTE
+		// re-block the spawn graph (door_go_up opened it with Open_Waypoint when bought),
+		// else zombies keep spawning behind doors that are locked again this game.
+		if (door.wayTarget != "")
+			Close_Waypoint(door.wayTarget);
+#endif
+
 		door = findfloat(world, isopen, true);
 	}
 }
@@ -336,6 +345,24 @@ void() Soft_Restart = {
 		who = find(who,classname,"ai_zombie");
 	}
 
+	// remove leftover dogs (ai_dog) -- they weren't cleared and leaked into the fresh game
+	who = find(world,classname,"ai_dog");
+	while (who != world)
+	{
+		entity nextdog = find(who,classname,"ai_dog");
+		remove(who);
+		who = nextdog;
+	}
+
+	// nuke lingering revive triggers from the previous game -- if one survives the
+	// restart it will "revive" a now-healthy player and freeze their movement.
+	entity rt = find(world, classname, "revive_trigger");
+	while (rt != world) {
+		entity nextrt = find(rt, classname, "revive_trigger");
+		remove(rt);
+		rt = nextrt;
+	}
+
     GameRestart_CleanPowerUps();		// Get rid of any Power-Ups that were spawned and left.
     GameRestart_CleanWallSummons();		// Delete residual wall weapon spawns from our last game.
 	GameRestart_RepairBarricades();		// Make sure all barricades are fully repaired.
@@ -344,6 +371,7 @@ void() Soft_Restart = {
 	GameRestart_RestoreFakeRemovals();	// Puts back everything "removed" using Ent_FakeRemove().
 	GameRestart_OpenClosedDoors(); 		// Restores doors that were previously opened in last session.
 	GameRestart_ResetPower();			// Turns off Power and resets Power Switch state.
+	Gamemode_Hardpoint_OnRestart();		// Hardpoint: re-open all doors at round 1 (else a zone can lock behind a shut door = softlock).
 
 	//reset buyable ending
 	endgame = find(world, classname, "func_ending");
@@ -369,31 +397,61 @@ void() Soft_Restart = {
 		tp.think = SUB_Null;
 	}
 
-	self = oldself;
-	self.downed = 0;
-	self.progress_bar = 0;
-	self.progress_bar_time = 0;
-	self.progress_bar_percent = 0;
-	self.isBuying = false;
-	self.style = 0;
+	// Global (once) resets.
 	in_endgame_sequence = false;
 	rounds = 0;
-	self.score = 0;
-	self.points = 0;
+	player_count = 0;
+	InitRounds();
+	Gamemode_Cranked_Init();	// clear Cranked tier/powerup timers so a restart starts fresh
+	Gamemode_SkullBall_OnRestart();	// re-arm Skull Ball setup (reopen doors, re-place skull) at round 1
 
-	for(float i = 0; i < MAX_PLAYER_WEAPONS; i++) {
-		self.weapons[i].weapon_id = 0;
+	// players who bled out became spectators -- the loop below only finds "player",
+	// so fold them back into the player set first or they're never respawned.
+	entity sp = find(world, classname, "spectator");
+	while (sp != world) {
+		entity nextsp = find(sp, classname, "spectator");
+		sp.classname = "player";
+		sp.is_spectator = false;
+		sp.spec_viewtarget = world;
+		sp = nextsp;
 	}
 
-	// naievil -- clear betty
-	self.secondary_grenades = 0;
-	self.grenades = 1;
-	self.pri_grenade_state = 0;
+	// reset AND respawn EVERY player, not just the first found -- the original code
+	// only respawned the host, so co-op joiners were left with no view/model.
+	entity p = find(world, classname, "player");
+	while (p != world) {
+		entity nextp = find(p, classname, "player");
 
-	player_count = 0;
+		self = p;
+		self.downed = 0;
+		// clear any leftover revive linkage/penalty so a respawned player
+		// isn't stuck "being revived" or movement-locked after the restart.
+		self.beingrevived = false;
+		self.firer = world;
+		self.speed_penalty = 0;
+		self.speed_penalty_time = 0;
+		self.progress_bar = 0;
+		self.progress_bar_time = 0;
+		self.progress_bar_percent = 0;
+		self.isBuying = false;
+		self.style = 0;
+		self.score = 0;
+		self.points = 0;
+		self.kills = 0;
 
-	InitRounds();
-	PutClientInServer();
+		for(float i = 0; i < MAX_PLAYER_WEAPONS; i++) {
+			self.weapons[i].weapon_id = 0;
+		}
+
+		// naievil -- clear betty
+		self.secondary_grenades = 0;
+		self.grenades = 1;
+		self.pri_grenade_state = 0;
+
+		PutClientInServer();
+
+		p = nextp;
+	}
 
 	nzp_screenflash(world, SCREENFLASH_COLOR_BLACK, 1, SCREENFLASH_FADE_OUT);
 }

@@ -215,6 +215,7 @@ void() m_init =
 	// Init Cvars
 	autocvar(cl_cinematic, 0);
 	autocvar(nzp_particles, 1);
+	autocvar(r_hdtextures, 0);
 	autocvar(nzp_uivolume, 1);
 	autocvar(nzp_bgmvolume, 1);
 	autocvar(vid_ultrawide_limiter, 0);

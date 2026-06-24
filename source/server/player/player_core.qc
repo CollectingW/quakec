@@ -27,6 +27,10 @@
 
 */
 
+#ifndef SVC_SETVIEW
+#define SVC_SETVIEW 5
+#endif
+
 void(entity e) Light_None;
 void() Spawns_Init;
 void() SUB_UseTargets;
@@ -45,7 +49,7 @@ void() Test_RunAllTests;
 #define PLAYER_START_HEALTH_EASY		125
 #define PLAYER_START_HEALTH_NORMAL		100
 #define PLAYER_START_HEALTH_HARD		75
-#define PLAYER_START_HEALTH_NIGHTMARE	25
+#define PLAYER_START_HEALTH_NIGHTMARE	50
 
 #define PLAYER_CROUCH_DIFFERENCE_HL 	25
 #define PLAYER_PRONE_DIFFERENCE_HL 		23
@@ -249,6 +253,85 @@ void() PAnim_GetUp9		=[	10,		SUB_Null			] {self.frame = 48;}
 #define right 		3
 #define all_move    -1
 
+//
+// IsPistolWeapon()
+// Returns TRUE if the weapon is a one-handed pistol type
+//
+float(float weap) IsPistolWeapon =
+{
+	if (weap == W_COLT || weap == W_357 || weap == W_BIATCH || weap == W_KILLU)
+		return TRUE;
+	return FALSE;
+};
+
+// UpdateThirdPersonWeapon(): creates/updates/removes a third-person weapon model
+// entity that follows the player while chase camera mode is active.
+void() UpdateThirdPersonWeapon =
+{
+	// gate on self.button1 (per-client chase flag), NOT cvar("chase_active") which
+	// reads the host's single cvar and would spawn the model for every client.
+	if (self.button1 != 1 && self.button1 != 2) {	// 5/6 = first-person lean, treat as not third-person
+		// Remove the weapon entity if this player isn't in third person.
+		if (self.weapon_entity) {
+			remove(self.weapon_entity);
+			self.weapon_entity = world;
+		}
+		return;
+	}
+
+	// Create weapon entity if it doesn't exist
+	if (!self.weapon_entity) {
+		self.weapon_entity = spawn();
+		self.weapon_entity.movetype = MOVETYPE_NONE;
+		self.weapon_entity.solid = SOLID_NOT;
+		self.weapon_entity.owner = self;
+	}
+
+	// Update model to current weapon's third-person model (gorvmodel=1)
+	string tp_weapon_model = GetWeaponModel(self.weapon, 1);
+	setmodel(self.weapon_entity, tp_weapon_model);
+
+	// Position based on weapon type and player state
+	makevectors(self.angles);
+
+	float is_pistol = IsPistolWeapon(self.weapon);
+	vector weapon_offset;
+	vector weapon_angles;
+
+	if (self.sprinting) {
+		// Sprinting - weapons stowed
+		if (is_pistol) {
+			// Pistol: holstered at right hip
+			weapon_offset = self.origin + v_right * 8 + '0 0 8';
+			weapon_angles = self.angles + '80 -90 0';
+		} else {
+			// Rifle: slung diagonally across back (barrel pointing behind player)
+			weapon_offset = self.origin - v_forward * 8 - v_right * 2 + '0 0 28';
+			weapon_angles_x = self.angles_x + 35;
+			weapon_angles_y = self.angles_y + 180;  // 180 = facing behind player
+			weapon_angles_z = -35;
+		}
+	} else {
+		// Normal stance and ADS - weapon held in front
+		if (is_pistol) {
+			// Pistol held in right hand - raised to chest/hand level
+			weapon_offset = self.origin + v_forward * 16 + v_right * 8 + '0 0 26';
+			weapon_angles = self.angles;
+		} else {
+			// Rifle held with both hands - more to the right and lower
+			weapon_offset = self.origin + v_forward * 14 + v_right * 8 + '0 0 18';
+			weapon_angles = self.angles;
+		}
+
+		// Apply recoil - use punchangle for weapon kick
+		weapon_angles_x = weapon_angles_x + (self.punchangle_x * 5);
+		weapon_angles_y = weapon_angles_y + (self.punchangle_y * 3);
+	}
+
+	setorigin(self.weapon_entity, weapon_offset);
+	self.weapon_entity.angles = weapon_angles;
+};
+
 float(float dir) checkMovement =
 {	
 	switch(dir) {
@@ -296,10 +379,19 @@ void(entity who, float value, float impacted_by_2x_points) Player_ChangeScore =
 	if (who.downed)
 		return;
 
+	// "Hardpoint" gamemode: you only EARN points inside the active zone.
+	// Spending (negative values) still works anywhere.
+	if (value > 0 && cvar("sv_gamemode") == GAMEMODE_HARDPOINT && !Hardpoint_PlayerInZone(who))
+		return;
+
 	// Multiply the value if it is to be impacted by Double
 	// Points
 	if (impacted_by_2x_points && x2_finished > time)
 		value *= 2;
+
+	// Nightmare difficulty: tighter economy
+	if (value > 0 && cvar("sv_difficulty") == 3)
+		value = floor(value * 0.75);
 
 	// The value was positive, so we should do two things:
 	// 1. add this to our point threshold check for Power-Up
@@ -459,6 +551,7 @@ void() Player_UpdateProgressBar =
 //
 .entity last_looked_ent;
 .float last_looked_time;
+.float last_useprint_time;
 void(entity who, entity active_ent, float type, float cost, float weapon) Player_UseprintWithWait =
 {
 	// Small delay before we can interact with a new entity to
@@ -468,11 +561,21 @@ void(entity who, entity active_ent, float type, float cost, float weapon) Player
 
 	if (who.last_looked_time < time) {
 		who.last_looked_time = time + 0.15;
+		// Focusing a NEW entity -- allow an immediate send so its prompt shows
+		// instantly instead of waiting out the throttle below.
+		if (who.last_looked_ent != active_ent)
+			who.last_useprint_time = 0;
 		who.last_looked_ent = active_ent;
 	}
 
-	if (who.last_looked_ent == active_ent)
-		useprint(who, type, cost, weapon);
+	if (who.last_looked_ent == active_ent) {
+		// throttle: useprint() is reliable but callers fire every frame; 60x/s backs
+		// up the reliable buffer and flickers the prompt, so cap it to ~12 Hz.
+		if (who.last_useprint_time < time) {
+			who.last_useprint_time = time + 0.08;
+			useprint(who, type, cost, weapon);
+		}
+	}
 };
 
 //
@@ -564,8 +667,38 @@ void(float override) JumpCheck =
 }
 
 
+// Menu security-camera mode: park the frozen player at the current camera spot each
+// frame so entity culling follows the camera. Spots/order MUST match ndu_camspots in view.c.
+void() Cam_Tour_Update =
+{
+	float idx = floor(time / 6);
+	idx = idx - (floor(idx / 7) * 7);	// idx % 7
+
+	vector org = '1416 2012 285';
+	if (idx == 1) org = '1016 2342 279';
+	else if (idx == 2) org = '2228 2644 291';
+	else if (idx == 3) org = '1009 2692 138';
+	else if (idx == 4) org = '2226 2329 137';
+	else if (idx == 5) org = '1416 841 138';
+	else if (idx == 6) org = '1293 1786 142';
+
+	self.movetype = MOVETYPE_NONE;
+	self.solid = SOLID_NOT;
+	self.velocity = '0 0 0';
+	self.maxspeed = 0;
+	setorigin(self, org);
+	self.health = self.max_health;
+	self.weaponmodel = "";	// hide viewmodel
+};
+
+
 void() PlayerPreThink =
 {
+	if (cvar("cam_tour")) {
+		Cam_Tour_Update();
+		return;
+	}
+
 	if (self.downed) {
 		self.maxspeed = 30;
 	} else {
@@ -629,6 +762,12 @@ void() PlayerPreThink =
 
 		if (!self.isBuying)
 			self.maxspeed *= GetWeaponWalkSpeed(self.perks, self.weapon);
+
+		if (self.cranked_level > 0 && Gamemode_CrankedActive())
+			self.maxspeed *= 1 + self.cranked_level * 0.10;
+
+		if (cvar("sv_gamemode") == GAMEMODE_SKULLBALL)
+			self.maxspeed = Gamemode_SkullBall_GetCarrierSpeed(self.maxspeed);
 	}
 	if (self.is_spectator)
 	{
@@ -636,6 +775,15 @@ void() PlayerPreThink =
 		return;
 	}
 	
+#ifdef FTE
+	// Read lean state and enforce constraints BEFORE weapon logic.
+	self.current_lean = stof(infokey(self, "lean"));
+	if (self.stance == PLAYER_STANCE_PRONE)
+		self.current_lean = 0;
+	if (self.current_lean != 0)
+		self.sprinting = 0;
+#endif // FTE
+
 	if (cvar("waypoint_mode")) {
 		Waypoint_Logic();
 	} else {
@@ -678,6 +826,8 @@ void() PlayerPreThink =
 float player_trace_time;
 void() PlayerPostThink =
 {
+	if (cvar("cam_tour"))
+		return;
 
 #ifdef FTE
 
@@ -693,11 +843,24 @@ void() PlayerPostThink =
 		if (infokey(self, "chat") == "1")
 			self.is_in_menu = 2;
 	
+	// (current_lean is read in PreThink; PostThink only needs sprint gating
+	//  and the lean value is already up-to-date for this frame)
 
 #endif // FTE
 
 	if(self.is_spectator)
 		return;
+
+	// Town lava floor burns the player: 5 HP/sec + flame SFX while standing on it
+	if (!self.downed && self.health > 0 && isonlava(self.origin))
+	{
+		if (self.lava_dmg_time < time)
+		{
+			self.lava_dmg_time = time + 1;
+			Sound_PlaySound(self, "sounds/weapons/m2flame/flamethrower.wav", SOUND_TYPE_ENV_OBJECT, SOUND_PRIORITY_PLAYALWAYS);
+			DamageHandler(self, self, 5, DMG_TYPE_FLAMETHROWER);
+		}
+	}
 
 	//landsound
 	if((self.oldvelocity_z < -212) && (self.flags & FL_ONGROUND))
@@ -735,7 +898,10 @@ void() PlayerPostThink =
 				self.frame = 37;
 		}
 	}
-	
+
+	// Update third-person weapon model for chase camera mode
+	UpdateThirdPersonWeapon();
+
 #ifdef FTE
 
 	//footsteps
@@ -957,8 +1123,12 @@ void() Player_PickSpawnPoint =
 	// Give them their name
 	self.name = spawn_point.name;
 
-	// Set their location
-	self.origin = spawn_point.origin + '0 0 1';
+	// zero velocity FIRST: residual knockback otherwise survives respawn and flings
+	// the player back out of bounds. setorigin() (not raw origin=) to relink properly.
+	self.velocity = '0 0 0';
+	self.avelocity = '0 0 0';
+	self.punchangle = '0 0 0';
+	setorigin(self, spawn_point.origin + '0 0 1');
 	self.angles = spawn_point.angles;
 
 	// Assign their starting weapon
@@ -982,6 +1152,15 @@ void() PlayerSpawn =
 	self.solid = SOLID_BBOX;
 	self.flags = FL_CLIENT;
 	self.last_looked_time = 0;
+
+	// restore our own first-person view (we may have been spectating a teammate).
+	self.spec_viewtarget = world;
+	msg_entity = self;
+	WriteByte(MSG_ONE, SVC_SETVIEW);
+	WriteEntity(MSG_ONE, self);
+
+	// Clear any lingering last-stand death filter on (re)spawn.
+	SendDownedFilter(self, 0);
 
 	self.onfire = false;
 	self.fire_timeout = 0;
@@ -1069,6 +1248,9 @@ void() PlayerSpawn =
 			Player_AddScore(self, PLAYER_STARTPOINTS_NORMAL - self.points, false);
 	}
 
+	// apply the M1911 skin chosen in the Loadout menu (0 = None, 1 = Gold)
+	self.gold_colt = (cvar("nzp_skin_m1911") == 1);
+
 	self.weaponmodel = GetWeaponModel(self.weapon, 0);// Give weapon model
 	self.weapon2model = GetWeapon2Model(self.weapon, self.has_bowie_knife);
 
@@ -1113,6 +1295,39 @@ void() PlayerSpawn =
 	Gamemode_PlayerSpawn();
 };
 
+// Spectator_FollowThink(): while spectating (downed, waiting out the round) hook the
+// client view onto a living teammate via svc_setview instead of a dead/black view.
+void() Spectator_FollowThink =
+{
+	if (!self.is_spectator) {
+		self.spec_viewtarget = world;
+		return;
+	}
+
+	entity target = world;
+	entity p = find(world, classname, "player");
+	while (p != world) {
+		if (p != self && !p.downed) {
+			target = p;
+			break;
+		}
+		p = find(p, classname, "player");
+	}
+
+	if (target != world && target != self.spec_viewtarget) {
+		self.spec_viewtarget = target;
+		msg_entity = self;
+		WriteByte(MSG_ONE, SVC_SETVIEW);
+		WriteEntity(MSG_ONE, target);
+	}
+
+	if (target != world)
+		setorigin(self, target.origin);
+
+	self.think = Spectator_FollowThink;
+	self.nextthink = time + 0.25;
+};
+
 void() SpectatorSpawn =
 {
 	entity spawnpoint = find(world, classname, "info_player_1_spawn");
@@ -1149,6 +1364,11 @@ void() SpectatorSpawn =
 #endif // FTE
 
 	setorigin(self, spawnpoint.origin + '0 0 20');
+
+	// start watching through a living teammate's view.
+	self.spec_viewtarget = world;
+	self.think = Spectator_FollowThink;
+	self.nextthink = time + 0.1;
 };
 
 //called when a client loads a map
@@ -1169,13 +1389,10 @@ void() PutClientInServer =
 		bprint(PRINT_HIGH, " has joined the game.\n");
 	}
 	
-	if (spawn_time > time || !rounds)
-		PlayerSpawn();
+	// drop-in co-op: mid-round joiners spawn immediately (PlayerSpawn handles late-join sync)
+	PlayerSpawn();
 
 #ifdef FTE
-
-	else 
-		SpectatorSpawn();
 
 	// Force the client to always be networked to other clients, even when
 	// outside of the same PVS.
@@ -1214,7 +1431,11 @@ void() ClientDisconnect =
 		LastStand_UnlinkRevivee(self);
 		DisableReviveIcon(self.playernum);
 	} else if (self.firer != world) {
+		// fully break BOTH links, not just beingrevived -- a dangling firer makes
+		// a later UnlinkRevivee hit a stale/world firer and crash the server.
 		self.firer.beingrevived = false;
+		self.firer.firer = world;
+		self.firer = world;
 	}
 
 #ifdef FTE

@@ -102,6 +102,10 @@ void() startspectate =
 		return;
 	}
 	
+	// Clear the last-stand death filter -- we're now a spectator (health is
+	// restored to 100, so the engine's dead-state reset won't cover this).
+	SendDownedFilter(self, 0);
+
 	self.downedloop = 0;
 	self.beingrevived = false;
 	self.health = 100;
@@ -109,7 +113,7 @@ void() startspectate =
 	self.weapon2model = "";
 	self.downed = 0;
 	self.frame = 0;
-	
+
 	if (player_count > 1)
 		SpectatorSpawn();
 }
@@ -190,6 +194,9 @@ void () GetUp =
 	self.downed = 0;
 	self.classname = "player";
 
+	// Revived/stood up -- clear the last-stand death filter.
+	SendDownedFilter(self, 0);
+
 	// Take away the ammo that was fired while in last stand.
 	if (self.weapon != W_COLT) {
 		if (self.weapon == self.weaponbk) {
@@ -224,9 +231,112 @@ void(entity ent) CheckRevive =
 		GetUp();
 		DisableReviveIcon(self.playernum);
 		self.invoke_revive = 0;
+		// clear both sides of the link + beingrevived so we never end up with
+		// beingrevived==true but a dangling firer (crashes the next UnlinkRevivee).
+		self.beingrevived = false;
+		if (self.firer != world)
+			self.firer.firer = world;
 		self.firer = world;
 	}
 }
+
+// SCAVENGER loadout perk: on a kill, level-scaled chance (5/10/15/20%) to hand the
+// killer a spare magazine. State lives in archived cvars. Solo for now.
+float() Loadout_HasScavenger =
+{
+	return (cvar("nzp_loadout1") == 1 || cvar("nzp_loadout2") == 1 || cvar("nzp_loadout3") == 1);
+};
+
+float() Scavenger_Chance =
+{
+	float lvl = cvar("nzp_scav_level");
+	if (lvl < 1) lvl = 1;
+	if (lvl > 4) lvl = 4;
+	return lvl * 0.02;	// 2% / 4% / 6% / 8% -- toned down (5% felt OP)
+};
+
+string(float lvl) Scavenger_LevelName =
+{
+	if (lvl >= 4) return "Scavenger Pro";
+	if (lvl == 3) return "Scavenger 3";
+	if (lvl == 2) return "Scavenger 2";
+	return "Scavenger";
+};
+
+void(entity player) Scavenger_OnKill =
+{
+	if (player.classname != "player")
+		return;
+	if (!Loadout_HasScavenger())
+		return;
+	if (random() >= Scavenger_Chance())
+		return;
+
+	// Hand the killer a spare magazine of their current weapon's ammo.
+	entity oldself = self;
+	self = player;
+	float mag = getWeaponMag(self.weapon);
+	float maxres = getWeaponAmmo(self.weapon);
+	self.weapons[0].weapon_reserve = self.weapons[0].weapon_reserve + mag;
+	if (self.weapons[0].weapon_reserve > maxres)
+		self.weapons[0].weapon_reserve = maxres;
+	Sound_PlaySound(self, "sounds/pu/pickup.wav", SOUND_TYPE_ENV_OBJECT, SOUND_PRIORITY_PLAYALWAYS);
+	self = oldself;
+	// Scavenger levels on total reloads (200/400/600), handled in W_Reload --
+	// not on mags collected -- so the proc itself no longer grinds.
+};
+
+// DEADEYE loadout perk: headshot KILLS award bonus points (+25/50/75/100% by level).
+// Unlocks at 50 headshot kills ("Locked In"); levels at 150/300/500. Cross-gamemode.
+float() Loadout_HasDeadeye =
+{
+	return (cvar("nzp_loadout1") == 3 || cvar("nzp_loadout2") == 3 || cvar("nzp_loadout3") == 3);
+};
+
+float() Deadeye_Bonus =
+{
+	if (!Loadout_HasDeadeye())
+		return 1.0;
+	float lvl = cvar("nzp_deadeye_level");
+	if (lvl < 1) lvl = 1;
+	if (lvl > 4) lvl = 4;
+	return 1.0 + lvl * 0.25;
+};
+
+string(float lvl) Deadeye_LevelName =
+{
+	if (lvl >= 4) return "Deadeye Pro";
+	if (lvl == 3) return "Deadeye 3";
+	if (lvl == 2) return "Deadeye 2";
+	return "Deadeye";
+};
+
+void(entity player) Deadeye_OnHeadshotKill =
+{
+	if (player.classname != "player")
+		return;
+
+	float hs = cvar("nzp_headshot_kills") + 1;
+	cvar_set("nzp_headshot_kills", ftos(hs));
+
+	if (hs == 50) {
+		GiveAchievement(24, player);
+		centerprint(player, "Locked In unlocked!\nDeadeye ready in Loadout.");
+	} else if (hs < 50 && hs == floor(hs / 10) * 10) {
+		centerprint(player, strcat(strcat("Locked In: ", ftos(hs)), "/50"));
+	}
+
+	float oldlvl = cvar("nzp_deadeye_level");
+	if (oldlvl < 1) oldlvl = 1;
+	float newlvl = 1;
+	if (hs >= 500) newlvl = 4;
+	else if (hs >= 300) newlvl = 3;
+	else if (hs >= 150) newlvl = 2;
+	if (newlvl > oldlvl && newlvl >= 2) {
+		cvar_set("nzp_deadeye_level", ftos(newlvl));
+		centerprint(player, strcat("Perk upgraded:\n", Deadeye_LevelName(newlvl)));
+	}
+};
 
 void(entity attacker, float d_style) DieHandler =
 {
@@ -245,11 +355,40 @@ void(entity attacker, float d_style) DieHandler =
 		attacker.kills++;
 		nzp_hitmarker(attacker, true);
 
+		// Scavenger loadout perk: chance to drop a spare mag to the killer.
+		Scavenger_OnKill(attacker);
+
+		// "Packed Or Nothing": 1000 kills with a Pack-a-Punched weapon (any gamemode).
+		if (attacker.weapons[0].weapon_tier >= 1) {
+			float pk = cvar("nzp_pap_kills") + 1;
+			cvar_set("nzp_pap_kills", ftos(pk));
+			if (pk == 1000)
+				GiveAchievement(25, attacker);
+		}
+
+		// "Don't Bring a Knife": 100 melee kills in the Random gamemode.
+		if (d_style == DMG_TYPE_MELEE && cvar("sv_gamemode") == GAMEMODE_RANDOM) {
+			float kk = cvar("nzp_knife_kills") + 1;
+			cvar_set("nzp_knife_kills", ftos(kk));
+			if (kk == 100)
+				GiveAchievement(17, attacker);
+		}
+
+		// "Hold the Point": track whether every kill this round was in the zone.
+		if (cvar("sv_gamemode") == GAMEMODE_HARDPOINT) {
+			if (Hardpoint_PlayerInZone(attacker))
+				hardpoint_round_inzone_kill = 1;
+			else
+				hardpoint_round_tainted = 1;
+		}
+
 		float points_earned = 0;
 		switch(d_style) {
 			case DMG_TYPE_HEADSHOT:
 				points_earned = DMG_SCORE_HEADSHOT;
 				attacker.headshots++;
+				Deadeye_OnHeadshotKill(attacker);
+				points_earned = points_earned * Deadeye_Bonus();
 				break;
 			case DMG_TYPE_MELEE:
 				points_earned = DMG_SCORE_MELEE;
@@ -303,6 +442,9 @@ void(entity victim, entity attacker, float damage, float d_style) DamageHandler 
 
 	entity old_self;
 	if (victim.classname == "ai_zombie" || victim.classname == "ai_dog") {
+
+		if (attacker.cranked_level > 0 && Gamemode_CrankedActive())
+			damage = damage * (1 + attacker.cranked_level * 0.05);
 
 		if (attacker.classname == "player" && (victim.health - damage) > 0 && d_style != DMG_TYPE_OTHER) {
 			Player_AddScore(attacker, Gamemode_ScoreForDamage(DMG_SCORE_STDDAMAGE, d_style), true);
@@ -498,6 +640,12 @@ void(entity inflictor, entity attacker, float damage2, float mindamage, float ra
 				// inflicting damage from an explosive introduces a delay before
 				// player can sprint again.
 				ent.sprint_delay = time + 3;
+
+				// "Too Close!": hurt by your OWN rocket inside the Hardpoint zone.
+				if (inflictor.classname == "rocket"
+					&& cvar("sv_gamemode") == GAMEMODE_HARDPOINT
+					&& Hardpoint_PlayerInZone(ent))
+					GiveAchievement(19, ent);
 			}
 			// shake the camera on impact
 			vector distance;

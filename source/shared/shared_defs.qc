@@ -349,6 +349,7 @@ float 	map_compatibility_mode;
 
 #define STAT_GUNGAME_IDX		76
 #define STAT_GUNGAME_SCOREGOAL	77
+#define STAT_HOLDING_GRENADE	78	// 1 when player is holding a primed frag grenade (for trajectory preview)
 
 // Game Modes
 #define GAMEMODE_CLASSIC        0
@@ -358,6 +359,10 @@ float 	map_compatibility_mode;
 #define GAMEMODE_WILDWEST       4
 #define GAMEMODE_STICKSNSTONES  5
 #define GAMEMODE_FESTIVE 		6
+#define GAMEMODE_RANDOM         7
+#define GAMEMODE_HARDPOINT      8
+#define GAMEMODE_CRANKED        9
+#define GAMEMODE_SKULLBALL      10
 
 // Misc. player statistics
 .float playernum;
@@ -368,6 +373,8 @@ float 	map_compatibility_mode;
 .float downs;
 .float revives;
 .float points;
+
+.float gold_colt;
 
 float in_endgame_sequence;
 

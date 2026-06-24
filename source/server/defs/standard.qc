@@ -156,6 +156,7 @@ void            end_sys_globals;						// flag for structure dumping
 .float          maxspeed;
 .float     		facingenemy;
 .float          scale;
+.float          light_lev;	// per-entity dlight radius (engine entvars_t, used by the colored EF_*LIGHT effects). Must match progdefs.h order.
 void            end_sys_fields; 						// flag for structure dumping
 // End. Lines below this MAY be altered, to some extent
 
@@ -246,6 +247,7 @@ void    (entity client, float type, float cost, float weapon)                   
 vector  (entity zombie,vector start,vector min, vector max)                                     Get_First_Waypoint  = #88;
 void    (string s)                                                                            	Close_Waypoint      = #89;
 void    (vector start, vector min, vector max, vector end, float nomonsters, entity forent)   	tracebox            = #90;
+float   (entity from, entity target)                                                            Waypoint_Reachable  = #91; // side-effect-free door-aware reachability
 entity  (entity start, .float field, float match)                                               findfloat           = #98;
 float   (vector start, vector min, vector max, vector end, float nomonsters, entity forent)     tracemove           = #99;
 // 2001-09-20 QuakeC file access by FrikaC  start
@@ -278,7 +280,9 @@ void    (entity who, float version)                                             
 void    (entity who, float color, float duration, float type)                                   nzp_screenflash     = #507;
 void    (entity who, float state)                                                               nzp_lockviewmodel   = #508;
 void    (entity who, float low_frequency, float high_frequency, float duration)                 nzp_rumble          = #509;
+void    ()                                                                                      Weapon_FireRumble;
 void    (float gamemode)                                                                        nzp_setclientmode   = #510;
+float   (vector point)                                                                          isonlava            = #511;
 
 //
 // constants
@@ -388,10 +392,13 @@ void    (float gamemode)                                                        
 #define     SVC_CUTSCENE               	34              // 1998-08-08 Complete SVC list by Zhenga
 #define     SVC_WEAPONFIRE              35
 #define		SVC_HITMARK					36
+#define     SVC_DOWNEDFILTER            57
 #define     SVC_USEPRINT                38
 #define 	SVC_LIMBUPDATE  			51 				// naievil -- keep me
 #define 	SVC_BSPDECAL    			50				// naievil -- keep me
 #define 	SVC_ACHIEVEMENT 			52
+#define 	SVC_TURRETTIMER 			58		// [byte] seconds remaining (0 = clear)
+#define 	SVC_CRANKEDSTATUS 			59		// [byte] level [byte] seconds (255 = meltdown)
 
 #define     TE_SPIKE                    0
 #define     TE_SUPERSPIKE               1
@@ -446,6 +453,7 @@ void    (float gamemode)                                                        
 #define EF_PURPLELIGHT    		        4096
 #define EF_RAYRED	 			        8196			// red trail for porter x2
 #define EF_RAYGREEN  			        16384			// green trail for ray gun
+#define EF_HARDPOINT			        32768			// Hardpoint beacon: drawn through walls, tinted by frame (0=grey,1=blue)
 
 // messages
 #define     MSG_BROADCAST               0               // unreliable to all

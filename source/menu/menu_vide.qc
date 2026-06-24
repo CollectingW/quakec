@@ -1,4 +1,4 @@
-string menu_video_buttons[12] = {"vm_resol", "vm_fulls", "vm_shfps", "vm_maxps", "vm_vsync", "vm_fov", "vm_gamma", "vm_uwide", "vm_parts", "vm_filtr", "vm_apply", "vm_back"};
+string menu_video_buttons[13] = {"vm_resol", "vm_fulls", "vm_shfps", "vm_maxps", "vm_vsync", "vm_fov", "vm_gamma", "vm_uwide", "vm_parts", "vm_filtr", "vm_hdtex", "vm_apply", "vm_back"};
 
 float menu_video_init;
 float menu_video_modes;
@@ -10,6 +10,7 @@ float current_vsync;
 float current_ultrawide;
 float current_particles;
 float current_filter;
+float current_hdtextures;
 
 #define MAX_VIDEO_MODES     128 // FIXME: arbitrary.
 
@@ -84,6 +85,7 @@ void() Menu_Video_StoreCurrentSettings =
     current_ultrawide = cvar("vid_ultrawide_limiter");
     current_particles = cvar("nzp_particles");
     current_filter = (substring(strtoupper(cvar_string("gl_texturemode")), 0, 10) == "GL_NEAREST");
+    current_hdtextures = cvar("r_hdtextures");
 }
 
 void() Menu_Video_Init =
@@ -155,6 +157,14 @@ void() Menu_Video_UpdateFiltering =
         cvar_set("gl_texturemode", "GL_NEAREST_MIPMAP_LINEAR");
         current_filter = 1;
     }
+};
+
+void() Menu_Video_UpdateHDTextures =
+{
+    Menu_PlaySound(MENU_SND_ENTER);
+    current_hdtextures = !current_hdtextures;
+    cvar_set("r_hdtextures", ftos(current_hdtextures));
+    localcmd("vid_restart\n");
 };
 
 string(string prev_id) Menu_Video_GetNextButton =
@@ -287,7 +297,14 @@ void() Menu_Video =
     else filt_string = "LINEAR";
     Menu_DrawOptionValue(10, filt_string);
 
-    Menu_DrawDivider(12.25);
+    // HD Textures
+    Menu_Button(11, "vm_hdtex", "HD TEXTURES", "Toggle High Definition Remastered Textures.") ? Menu_Video_UpdateHDTextures() : 0;
+    string hd_string = "";
+    if (current_hdtextures) hd_string = "ENABLED";
+    else hd_string = "DISABLED";
+    Menu_DrawOptionValue(11, hd_string);
+
+    Menu_DrawDivider(13.25);
     Menu_Button(-2, "vm_apply", "APPLY", "Save & Apply Settings.") ? Menu_Video_ApplySettings() : 0;
     Menu_Button(-1, "vm_back", "BACK", "Return to Configuration Menu.") ? current_menu = MENU_OPTIONS : 0;
 

@@ -48,6 +48,15 @@
 float cheats_have_been_activated;
 float current_month_of_year;
 
+#ifdef FTE
+#define SVC_TURRETTIMER 58
+#define SVC_CRANKEDSTATUS 59
+#define EF_REDLIGHT 8
+#define EF_ORANGELIGHT 16
+#define EF_GREENLIGHT 32
+#define EF_HARDPOINT 32768
+#endif
+
 // cypress - NOTE
 // on/off are inverted compared to goldsrc for
 // compatibility with existing nzp content.
@@ -94,6 +103,8 @@ float global_trace_damage_multiplier;
 
 .vector oldvelocity;
 .float lastsound_time;
+.float lava_dmg_time;
+void(entity victim, entity attacker, float damage, float d_style) DamageHandler;
 string mappath;
 .float ads_toggle;
 float player_count;
@@ -191,6 +202,7 @@ void (float shotcount, float sprd, float Damage, float side) FireTrace;
 .float hitcount;
 .float viewmodel_effects;
 .float viewmodel2_effects;
+.entity weapon_entity; // Third-person weapon model entity for chase camera mode
 .float weapon_burst_count;
 .float weapon_burst_override;
 .float weapon_autoreload_pending;
@@ -253,6 +265,7 @@ var struct guninventory_struct
 .float secondary_grenades;
 .float primary_grenades;
 .float throw_delay;
+.float grenade_aiming;					// 1 while player holds a primed frag grenade (for trajectory preview)
 
 //weapon frames
 void Set_W_Frame (float startframe, float endframe, float duration, float funccalledin, float animtype, void(optional float t) endanimfunc, string set_model, float dontstartnew, float side, float lock_viewmodel);
@@ -512,6 +525,7 @@ string game_modifier_default_fog_color;
 .float 	boxstatus;
 .entity boxweapon;
 .float 	spins;
+.float 	box_free;	// mystery box: buyer rejected their pull, anyone may grab it
 .float 	papState;
 
 var struct mbox_struct
@@ -701,3 +715,84 @@ float G_PERKPOWER;
 .float last_solid;
 .float had_solid_modified;
 #endif // FTE
+
+// appended at the END so it doesn't shift existing field offsets (the engine reads
+// some custom fields by hardcoded offset for third-person rendering).
+.entity spec_viewtarget; // Spectator - the living teammate we're currently viewing through
+.entity revive_icon_ent; // the billboarded revive sprite hovering over this downed player
+.float sprint_after_reload; // sprint was deferred mid-reload; resume the sprint loop once the reload finishes
+.float reload_gave_ammo; // TRUE once the in-progress reload has actually loaded ammo (gates ADS reload-cancel so you can't bail a reload early)
+.float ai_wp;        // spawn-reachability: cached nearest waypoint index for a spawn point
+.float ai_wp_cached; // spawn-reachability: whether ai_wp has been computed
+                     // AI_SpawnReachable() is defined in ai/ai_core.qc (compiled in both builds)
+
+// "Random" gamemode hooks (defined in gamemodes/random.qc, included later in
+// the build than perk_a_cola.qc / wall_weapon.qc which call into them).
+float() Random_OverridePerkMachine;
+void() Random_OverrideWallWeapon;
+void() Gamemode_Random_Init;
+void() Gamemode_Random_PlayerSpawn;
+// Set by Random_OverridePerkMachine, consumed by Perk_InitMachine.
+string random_pick_model;
+float random_pick_id;
+float random_pick_skin;
+
+// TRUE when the "Random" RNG twist is active. Defined in gamemodes/core.qc;
+// used by the wall-buy and perk hooks which compile before core.qc.
+float() Gamemode_RandomActive;
+float() Gamemode_CrankedActive;
+// Rolls a wall-buy weapon (dedup pool + rare wonder-weapon "mystery" chance).
+// Defined in gamemodes/random.qc; used by the wall hooks that compile earlier.
+float() Random_RollWallWeapon;
+
+// "Hardpoint" gamemode hooks (defined in gamemodes/hardpoint.qc).
+void() Gamemode_Hardpoint_Init;
+void() Gamemode_Hardpoint_Frame;
+void() Gamemode_Hardpoint_OnRestart;
+float(entity who) Hardpoint_PlayerInZone;
+// "Hold the Point" achievement bookkeeping: per-round kill-location tracking.
+float hardpoint_round_tainted;		// a kill happened OUTSIDE the zone this round
+float hardpoint_round_inzone_kill;	// at least one kill happened INSIDE the zone
+
+// "Cranked" gamemode (defined in gamemodes/cranked.qc).
+void() Gamemode_Cranked_Init;
+void() Gamemode_Cranked_Frame;
+float() Cranked_FastReload;
+float() Cranked_FastFire;
+void() Gamemode_Cranked_PlayerSpawn;
+void() Gamemode_Cranked_PlayerPostThink;
+void(entity attacker, float death_style) Gamemode_Cranked_DieHandler;
+float(float current_delay) Gamemode_Cranked_GetRoundDelay;
+float(float count, float round, float type, float players) Gamemode_Cranked_GetZombieTotalForRound;
+
+.float cranked_level;
+.float cranked_started;	// has reached Cranked Lv1 (first kill) -> meltdown allowed
+.float lean_state;
+.float current_lean;
+.float cranked_deadline;
+.float cranked_meltdown;
+.float cranked_msg;
+.float cranked_hud_lv;
+.float cranked_hud_secs;
+
+// "Skull Ball" gamemode (defined in gamemodes/skull_ball.qc).
+void() Gamemode_SkullBall_Init;
+void() Gamemode_SkullBall_OnRestart;
+void() Gamemode_SkullBall_Frame;
+void() Gamemode_SkullBall_PlayerSpawn;
+float(float current_delay) Gamemode_SkullBall_GetRoundDelay;
+float(float count, float round, float type, float players) Gamemode_SkullBall_GetZombieTotalForRound;
+float(float current_speed) Gamemode_SkullBall_GetCarrierSpeed;
+
+.float skullball_carrying;	// TRUE while this player is carrying the skull
+.float skullball_carrying_b;	// TRUE while this player is carrying the butcher (golden) head
+.float skullball_throw_sel;	// 0 = L bumper acts on the standard skull, 1 = the butcher head
+.float skullball_bowl_mode;	// 0 = Throwing, 1 = Bowling (toggled by double-tap L)
+.float skullball_last_lpress;	// time the L-bumper charge began (impulse 48)
+.float skullball_charge_frac;	// 0..1 charge level captured on release (impulse 49)
+.float skullball_charging;	// TRUE while the L bumper is held (charging)
+.float skullball_charge_meter;	// 0-100 charge level, networked to the HUD meter (engine reads by name)
+.float skullball_bowling;	// (on a head entity) TRUE while it's a bowled projectile that mows zombies
+.float is_butcher;		// Skull Ball: this zombie is the promoted "Butcher" miniboss
+.float butcher_invuln;		// Skull Ball: Butcher is invincible until this time (spawn protection)
+.float butcher_hp;		// Skull Ball: Butcher's intended max health (restored during invuln)

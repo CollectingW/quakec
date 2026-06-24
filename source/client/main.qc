@@ -178,6 +178,7 @@ noref void(float apiver, string enginename, float enginever) CSQC_Init =
 	// cvars for custom settings
 	autocvar(cl_cinematic, 0);
 	autocvar(nzp_particles, 1);
+	autocvar(r_hdtextures, 0);
 	autocvar(nzp_decals, 1);
 	autocvar(vid_ultrawide_limiter, 0);
 	autocvar(cl_bobside, 0.02);
@@ -904,20 +905,23 @@ noref void(float width, float height, float menushown) CSQC_UpdateView =
 	setviewprop(VF_DRAWCROSSHAIR, 0);
 
 	float sensitivity_factor;
+	float is_thirdperson = cvar("chase_active");
+	float effective_viewzoom = is_thirdperson ? 1 : getstatf(STAT_VIEWZOOM);  // don't apply viewzoom in third-person
 
 	if (current_menu != MENU_NONE)
 		sensitivity_factor = 0;
 	else
-		sensitivity_factor = (1 + SCALE_CONSTANT * getstatf(STAT_VIEWZOOM)) / (1 + SCALE_CONSTANT);
+		sensitivity_factor = (1 + SCALE_CONSTANT * effective_viewzoom) / (1 + SCALE_CONSTANT);
 
 	if (gamepad_enabled && getstatf(STAT_FACINGENEMY) && cvar("in_aimassist") == 1)
 		sensitivity_factor *= 0.5;
 
 	setsensitivityscaler(sensitivity_factor);
 
-	setviewprop(VF_AFOV, autocvar(fov,90)*getstatf(STAT_VIEWZOOM));
+	// use base FOV in third-person, apply viewzoom scaling only in first-person
+	setviewprop(VF_AFOV, autocvar(fov,90)*effective_viewzoom);
 
-	cvar_set("r_viewmodel_fov", ftos(cvar("r_viewmodel_default_fov")*getstatf(STAT_VIEWZOOM)));
+	cvar_set("r_viewmodel_fov", ftos(cvar("r_viewmodel_default_fov")*effective_viewzoom));
 
 	// Increment the stopwatch
 	// FIXME: I don't really liket his being in UpdateView.. this has nothing to do with rendering.
@@ -950,7 +954,74 @@ noref void(float width, float height, float menushown) CSQC_UpdateView =
 	//autoadd entities received from servers for drawing	
 	addentities(MASK_ENGINE);
 
-	setproperty(VF_ORIGIN, playerOrigin + [ 0, 0, getstatf(STAT_VIEWHEIGHT)]);
+	// Leaning / Peeking calculations
+	// 1. Cancel lean if not aiming, in third-person, or dead/downed
+	if (getstatf(STAT_WEAPONZOOM) == 0 || cvar("chase_active") || getstatf(STAT_HEALTH) <= 0) {
+		lean_state = 0;
+	}
+
+	// 2. Cancel lean if moving
+	if (K_LEFTDOWN || K_RIGHTDOWN || K_FORWARDDOWN || K_BACKDOWN) {
+		lean_state = 0;
+	}
+
+	// 3. Smoothly interpolate current_lean towards lean_state
+	if (current_lean != lean_state) {
+		float lean_speed = clframetime * 8;
+		if (lean_speed > 1) lean_speed = 1;
+		current_lean += (lean_state - current_lean) * lean_speed;
+		if (fabs(current_lean - lean_state) < 0.001) {
+			current_lean = lean_state;
+		}
+	}
+
+	// 4. Calculate lean shift and tilt
+	vector lean_offset = '0 0 0';
+	if (current_lean != 0) {
+		vector base_angles = getproperty(VF_ANGLES);
+		vector yaw_only = '0 0 0';
+		yaw_only[1] = base_angles[1];
+		makevectors(yaw_only);
+		
+		vector target_shift = v_right * (current_lean * 20); // 20 units max shift
+		vector center_eye = playerOrigin + [0, 0, getstatf(STAT_VIEWHEIGHT)];
+		vector target_eye = center_eye + target_shift;
+		
+		traceline(center_eye, target_eye, 1, world); // 1 = MOVE_NOMONSTERS
+		
+		if (trace_fraction < 1.0) {
+			lean_offset = (trace_endpos - center_eye);
+			if (vlen(lean_offset) > 2) {
+				lean_offset = lean_offset - (normalize(target_shift) * 2);
+			} else {
+				lean_offset = '0 0 0';
+			}
+		} else {
+			lean_offset = target_shift;
+		}
+		
+		// Add roll (tilt) to camera angles. Left lean = positive roll, right lean = negative roll.
+		camang[2] += -current_lean * 35; // 35 degrees max tilt
+		
+		// Restore vectors
+		makevectors(base_angles);
+	}
+
+	// 5. Handle R Bumper grenade timer
+	if (r_bumper_is_held && !r_bumper_grenade_fired) {
+		if (!(K_LEFTDOWN || K_RIGHTDOWN || K_FORWARDDOWN || K_BACKDOWN) && getstatf(STAT_WEAPONZOOM) > 0) {
+			if (cltime - r_bumper_down_time >= 1.5) {
+				r_bumper_grenade_fired = TRUE;
+				lean_state = 0;
+				localcmd("-aim\n");
+				localcmd("+grenade\n");
+			}
+		} else {
+			r_bumper_is_held = FALSE;
+		}
+	}
+
+	setproperty(VF_ORIGIN, playerOrigin + [ 0, 0, getstatf(STAT_VIEWHEIGHT)] + lean_offset);
 	//setproperty(VF_ANGLES, view_angles);
 
 	// Draw the client's viewmodels.
@@ -980,6 +1051,11 @@ noref void(float width, float height, float menushown) CSQC_UpdateView =
 
 	//does what you think it does
 	renderscene();
+
+	// Draw grenade trajectory arc + impact zone in third-person mode
+	GrenadeTrajectory_Draw();
+
+	setlocaluserinfo(0, "lean", ftos(current_lean));
 
 	if (current_menu != MENU_NONE)
 	{
@@ -1105,6 +1181,61 @@ noref float(float evtype, float scanx, float chary, float devid) CSQC_InputEvent
 	if (current_menu != MENU_NONE)
 	{
 		return sui_input_event(evtype, scanx, chary, devid);
+	}
+
+	// Handle directional leaning while Aiming Down Sights (ADS)
+	if (getstatf(STAT_WEAPONZOOM) > 0 && !cvar("chase_active"))
+	{
+		if (scanx == K_GP_LSHOULDER || scanx == 'q')
+		{
+			if (evtype == IE_KEYDOWN)
+			{
+				if (lean_state == -1)
+					lean_state = 0;
+				else
+					lean_state = -1;
+			}
+			return TRUE;
+		}
+		if (scanx == 'e')
+		{
+			if (evtype == IE_KEYDOWN)
+			{
+				if (lean_state == 1)
+					lean_state = 0;
+				else
+					lean_state = 1;
+			}
+			return TRUE;
+		}
+		if (scanx == K_GP_RSHOULDER)
+		{
+			if (evtype == IE_KEYDOWN)
+			{
+				r_bumper_down_time = cltime;
+				r_bumper_is_held = TRUE;
+				r_bumper_grenade_fired = FALSE;
+			}
+			else if (evtype == IE_KEYUP)
+			{
+				if (r_bumper_is_held)
+				{
+					r_bumper_is_held = FALSE;
+					if (!r_bumper_grenade_fired)
+					{
+						if (lean_state == 1)
+							lean_state = 0;
+						else
+							lean_state = 1;
+					}
+					else
+					{
+						localcmd("-grenade\n");
+					}
+				}
+			}
+			return TRUE;
+		}
 	}
 
 	if (evtype == IE_KEYDOWN) {

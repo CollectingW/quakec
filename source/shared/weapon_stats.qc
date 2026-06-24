@@ -2883,6 +2883,8 @@ string(float wep, float gorvmodel) GetWeaponModel =
 		case W_COLT:
 			if (gorvmodel)
 				return ("models/weapons/m1911/g_colt.mdl");
+			else if (self.gold_colt)
+				return ("models/weapons/m1911/v_goldcolt.mdl");
 			else
 				return ("models/weapons/m1911/v_colt.mdl");
 		case W_BIATCH:

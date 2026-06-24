@@ -524,6 +524,16 @@ void() perk_pap =
 	setmodel(self, self.model);
 	setsize(self, '-44 -44 -24', '44 44 64');
 
+	// the machine is SOLID_TRIGGER (so you can upgrade), which also lets you walk
+	// through it -- add an invisible solid blocker (like the perks) for collision.
+	entity pap_blocker = spawn();
+	pap_blocker.classname = "perk_blocker";
+	pap_blocker.owner = self;
+	pap_blocker.movetype = MOVETYPE_NONE;
+	pap_blocker.solid = SOLID_BBOX;
+	setorigin(pap_blocker, self.origin);
+	setsize(pap_blocker, '-32 -32 -72', '32 32 16');
+
     self.think = PAP_Initalize;
     self.nextthink = time + 0.2;
 };

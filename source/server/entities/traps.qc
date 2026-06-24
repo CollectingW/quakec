@@ -347,9 +347,9 @@ void() set_zapper_bbox =
 				bbmax_y = 20;
 				bbmax_z = 20;
 				break;
-			default: 
-				bprint(PRINT_HIGH, "WARN: Invalid X axis rotation for zapper_node.\n");
-				bprint(PRINT_HIGH, "      Collision box is going to be incorrect.\n");
+			default:
+				dprint("WARN: Invalid X axis rotation for zapper_node.\n");
+				dprint("      Collision box is going to be incorrect.\n");
 				break;
 		}
 	} else if (self.angles_z) {
@@ -383,16 +383,16 @@ void() set_zapper_bbox =
 				bbmax_y = distance/2;
 				bbmax_x = 20;
 				break;
-			default: 
-				bprint(PRINT_HIGH, "WARN: Invalid Z axis rotation for zapper_node.\n");
-				bprint(PRINT_HIGH, "      Collision box is going to be incorrect.\n");
+			default:
+				dprint("WARN: Invalid Z axis rotation for zapper_node.\n");
+				dprint("      Collision box is going to be incorrect.\n");
 				break;
 		}
 	}
 
 	if (self.angles_y) {
-		bprint(PRINT_HIGH, "WARN: zapper_node object with Y axis rotation.\n");
-		bprint(PRINT_HIGH, "      Use r_showbboxes to verify zap collision.\n");
+		dprint("WARN: zapper_node object with Y axis rotation.\n");
+		dprint("      Use r_showbboxes to verify zap collision.\n");
 	}
 
 	setsize(self, bbmin, bbmax);

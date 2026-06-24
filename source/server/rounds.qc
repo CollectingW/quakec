@@ -144,6 +144,19 @@ void() EndRound =
 {
 	string end_round_tune = "";
 
+	// "Hold the Point": a round is clean if you got a kill INSIDE the zone and
+	// none outside it. Tally + reset the per-round flags as the round completes.
+	if (cvar("sv_gamemode") == GAMEMODE_HARDPOINT) {
+		if (hardpoint_round_inzone_kill && !hardpoint_round_tainted) {
+			float cr = cvar("nzp_hp_clean_rounds") + 1;
+			cvar_set("nzp_hp_clean_rounds", ftos(cr));
+			if (cr == 10)
+				GiveAchievement(18);
+		}
+		hardpoint_round_tainted = 0;
+		hardpoint_round_inzone_kill = 0;
+	}
+
 	entity who = find(world,classname,"spectator");
 	while(who != world)
 	{
@@ -345,6 +358,9 @@ void() Round_Core =
 	if (in_endgame_sequence)
 		return;
 
+	if (cvar("cam_tour"))	// menu security-camera mode: no rounds/spawning
+		return;
+
 	if (round_changetime) {
 		if (round_changetime <= (time + 2)) {
 			if (!rounds)
@@ -368,6 +384,18 @@ void() Round_Core =
 		NewRound();
 		return;
 	} else if (round_changetime != 0) return;
+
+	// continuous spawning (Cranked + Skull Ball): keep Remaining_Zombies pinned high
+	// and return before EndRound so killing the last zombie can't cycle the wave.
+	if ((Gamemode_CrankedActive() || cvar("sv_gamemode") == GAMEMODE_SKULLBALL) && rounds > 0) {
+		Remaining_Zombies = 999;
+		Total_Zombies = Current_Zombies + 999;
+		spawn_time = 0;
+		if (find(world, classname, "ai_zombie") == world)
+			zombie_spawn_timer = 0;
+		Spawn_Enemy();
+		return;
+	}
 
 	if (Total_Zombies > Current_Zombies && spawn_time < time) {
 		Spawn_Enemy();
