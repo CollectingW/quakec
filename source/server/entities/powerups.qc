@@ -914,6 +914,32 @@ void() PU_Touch =
 		// Run Power-Up function
 		PU_LogicFunction(self.walktype);
 
+		if (self.walktype == PU_MAXAMMO) {
+			float max_ammos = cvar("nzp_max_ammos") + 1;
+			cvar_set("nzp_max_ammos", ftos(max_ammos));
+			if (max_ammos >= 25) {
+				GiveAchievement(35, other);
+			}
+		} else if (self.walktype == PU_CARPENTER) {
+			float carpenters = cvar("nzp_carpenters") + 1;
+			cvar_set("nzp_carpenters", ftos(carpenters));
+			if (carpenters >= 25) {
+				GiveAchievement(36, other);
+			}
+		} else if (self.walktype == PU_NUKE) {
+			float nukes = cvar("nzp_nukes") + 1;
+			cvar_set("nzp_nukes", ftos(nukes));
+			if (nukes >= 25) {
+				GiveAchievement(37, other);
+			}
+		} else if (self.walktype == PU_INSTAKILL) {
+			float instakills = cvar("nzp_instakills") + 1;
+			cvar_set("nzp_instakills", ftos(instakills));
+			if (instakills >= 25) {
+				GiveAchievement(38, other);
+			}
+		}
+
 #ifdef FTE
 		if (game_modifier_powerup_toast_for_all == true || self.walktype == PU_MAXAMMO)
 			nzp_poweruptoast(self.walktype);

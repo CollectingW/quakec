@@ -378,17 +378,31 @@ void() Thrall_Think =
 		Zombie_PlaySoundType(ZOMBIE_SOUND_TYPE_MELEE);
 		if (self.owner != world && self.owner.classname == "player") {
 			Player_AddScore(self.owner, SB_THRALL_KILL_PTS, false);
-			if (cvar("sv_gamemode") == GAMEMODE_SKULLBALL) {
-				float thk = cvar("nzp_thrall_kills") + 1;
-				cvar_set("nzp_thrall_kills", ftos(thk));
-				if (thk == 100) {
-					GiveAchievement(28, self.owner);
-					centerprint(self.owner, "No Strings Attached unlocked!\nPuppeteer ready in Loadout.");
-				} else if (thk < 100 && thk == floor(thk / 10) * 10) {
-					string s1 = strcat("No Strings Attached: ", ftos(thk));
-					string s2 = strcat(s1, "/100");
-					centerprint(self.owner, s2);
-				}
+			
+			float thk = cvar("nzp_thrall_kills") + 1;
+			cvar_set("nzp_thrall_kills", ftos(thk));
+			
+			if (thk == 100) {
+				GiveAchievement(28, self.owner);
+				centerprint(self.owner, "No Strings Attached unlocked!\nPuppeteer ready in Loadout.");
+			} else if (thk < 100 && thk == floor(thk / 10) * 10) {
+				string s1 = strcat("No Strings Attached: ", ftos(thk));
+				string s2 = strcat(s1, "/100");
+				centerprint(self.owner, s2);
+			}
+
+			// Leveling up Puppeteer on total thrall kills:
+			// Level 2: 250, Level 3: 450, Level 4 (Pro): 700.
+			float oldlvl = cvar("nzp_puppet_level");
+			if (oldlvl < 1) oldlvl = 1;
+			float newlvl = 1;
+			if (thk >= 700) newlvl = 4;
+			else if (thk >= 450) newlvl = 3;
+			else if (thk >= 250) newlvl = 2;
+
+			if (newlvl > oldlvl && newlvl >= 2) {
+				cvar_set("nzp_puppet_level", ftos(newlvl));
+				centerprint(self.owner, strcat("Perk upgraded:\n", Puppeteer_LevelName(newlvl)));
 			}
 		}
 
@@ -423,8 +437,18 @@ void(vector org, entity master) Thrall_Spawn =
 	t.solid      = SOLID_NOT;
 	t.flags      = FL_MONSTER;			// canonical walking-monster flag for movetogoal
 	setmodel(t, "models/ai/zfull.mdl");
-	setsize(t, '-16 -16 -24', '16 16 40');
-	setorigin(t, org + '0 0 8');
+
+	if (map_compatibility_mode == MAP_COMPAT_BETA) {
+		setsize(t, '-6 -6 -24', '6 6 22');
+		setorigin(t, org + '0 0 24');
+#ifdef FTE
+		t.hull = 1;
+#endif
+	} else {
+		setsize(t, '-8 -8 -32', '8 8 30');
+		setorigin(t, org + '0 0 32');
+	}
+
 	t.effects    = EF_GREENLIGHT;		// friendly green aura
 	t.light_lev  = SB_THRALL_GLOW;		// small radius so it glows on itself
 	t.takedamage = DAMAGE_NO;			// invulnerable for its brief life
@@ -626,7 +650,7 @@ void(entity carrier) SkullBall_Deliver =
 	skullball_carrier = world;
 
 	// The body you just fed reanimates (head restored!) and fights for you.
-	Thrall_Spawn(skullball_pedestal_ent.origin, carrier);
+	Thrall_Spawn(skullball_pedestal_ent.origin - '0 0 33', carrier);
 
 	// Relocate both skull and pedestal
 	SkullBall_PlaceSkull();
@@ -657,7 +681,7 @@ void(entity carrier) SkullBall_DeliverButcher =
 		Spawn_Powerup(where + [(random()-0.5)*48, (random()-0.5)*48, 0], -1);
 
 	// a thrall too, then park the whole butcher objective
-	Thrall_Spawn(skullball_bpedestal_ent.origin, carrier);
+	Thrall_Spawn(skullball_bpedestal_ent.origin - '0 0 33', carrier);
 	SkullBall_ClearGold();
 
 	if (carrier == world)

@@ -451,6 +451,9 @@ void() LastStand_TouchReviveTrigger =
 		// and increment their revives stat.
 		Player_AddScore(other, self.owner.requirespower, false);
 		self.owner.revives++;
+		if (player_count > 1) {
+			GiveAchievement(29, other); // Muchos Gracias
+		}
 
 		entity old_self = self;
 		self = self.owner;
@@ -503,6 +506,13 @@ void(entity client) LastStand_Begin =
 	self.weapons[1].weapon_magazine == 0 && self.weapons[1].weapon_magazine_left == 0 && 
 	self.weapons[1].weapon_reserve == 0) {
 		GiveAchievement(9, self);
+	}
+
+	if (first_downed_player_occurred == 0) {
+		first_downed_player_occurred = 1;
+		if (player_count > 1) {
+			GiveAchievement(33, self); // Something Stinks!
+		}
 	}
 
 	// Aim out to reset zoom values

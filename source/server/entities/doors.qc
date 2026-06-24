@@ -265,6 +265,25 @@ if (self.state == STATE_TOP || self.state == STATE_UP)
 		{
 			door_fire();
 			
+			if (first_door_bought == 0)
+			{
+				first_door_bought = 1;
+				if (player_count > 1)
+				{
+					GiveAchievement(32, other); // The Carry
+					
+					entity p_broke = find(world, classname, "player");
+					while (p_broke != world)
+					{
+						if (p_broke != other)
+						{
+							GiveAchievement(31, p_broke); // Broke.
+						}
+						p_broke = find(p_broke, classname, "player");
+					}
+				}
+			}
+			
 			// We need to create a new entity with the specific assignment of
 			// just playing the door sound, due to the door moving if we just
 			// assign the sound to the door, it cannot be heard when the engine

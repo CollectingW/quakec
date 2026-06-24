@@ -259,19 +259,35 @@ float() Loadout_HasMedical =
 
 void(vector org, entity master) Thrall_Spawn; // prototype from skull_ball.qc
 
+float() Puppeteer_Chance =
+{
+	float lvl = cvar("nzp_puppet_level");
+	if (lvl < 1) lvl = 1;
+	if (lvl > 4) lvl = 4;
+	return 0.01 + (lvl * 0.01);	// lvl 1: 2%, lvl 2: 3%, lvl 3: 4%, lvl 4: 5%
+};
+
+string(float lvl) Puppeteer_LevelName =
+{
+	if (lvl >= 4) return "Puppeteer Pro";
+	if (lvl == 3) return "Puppeteer 3";
+	if (lvl == 2) return "Puppeteer 2";
+	return "Puppeteer";
+};
+
 void(entity player, vector spawn_org) Puppeteer_OnKill =
 {
 	if (player.classname != "player")
 		return;
 	if (!Loadout_HasPuppeteer())
 		return;
-	if (random() >= 0.01) // 1% chance proc
+	if (random() >= Puppeteer_Chance())
 		return;
 
 	// snap spawn location to floor
 	traceline(spawn_org + '0 0 32', spawn_org - '0 0 128', TRUE, world);
 	if (trace_fraction < 1)
-		spawn_org = trace_endpos;
+		spawn_org = trace_endpos + '0 0 2';
 
 	Thrall_Spawn(spawn_org, player);
 	centerprint(player, "Puppeteer active: Spawned Thrall!");
@@ -653,7 +669,8 @@ void(entity inflictor, entity attacker, float damage2, float mindamage, float ra
 	float 	damage_style = 0;
 	entity	ent;
 
-	float 	multi, r;
+	float 	multi, r, dive_kills;
+	dive_kills = 0;
 	ent = findradius(inflictor.origin, radius);
 	
 	while (ent != world)
@@ -815,9 +832,18 @@ void(entity inflictor, entity attacker, float damage2, float mindamage, float ra
 		}
 
 		if (final_damage > 0) {
-			if (CanDamage (ent, inflictor))
+			if (CanDamage (ent, inflictor)) {
+				float dead_before = (ent.health <= 0);
 				DamageHandler (ent, attacker, final_damage, damage_style);
+				if (damage_style == DMG_TYPE_FLOPPER && ent.health <= 0 && !dead_before && (ent.classname == "ai_zombie" || ent.classname == "ai_dog")) {
+					dive_kills = dive_kills + 1;
+				}
+			}
 		}
 		ent = ent.chain;
+	}
+
+	if (damage_style == DMG_TYPE_FLOPPER && dive_kills >= 5) {
+		GiveAchievement(30, attacker);
 	}
 };

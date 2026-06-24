@@ -401,6 +401,8 @@ void() Soft_Restart = {
 	in_endgame_sequence = false;
 	rounds = 0;
 	player_count = 0;
+	first_door_bought = 0;
+	first_downed_player_occurred = 0;
 	InitRounds();
 	Gamemode_Cranked_Init();	// clear Cranked tier/powerup timers so a restart starts fresh
 	Gamemode_SkullBall_OnRestart();	// re-arm Skull Ball setup (reopen doors, re-place skull) at round 1

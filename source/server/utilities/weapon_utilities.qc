@@ -370,6 +370,12 @@ void Weapon_AssignWeapon(float weapon_slot, float weapon_id, float weapon_mag, f
 
 	// Now tell the player to hold it.
 	Weapon_SetActiveInSlot(weapon_slot, true);
+	
+	if ((self.perks & P_MULE) && self.weapons[0].weapon_id && self.weapons[1].weapon_id && self.weapons[2].weapon_id) {
+		if (IsPapWeapon(self.weapons[0].weapon_id) && IsPapWeapon(self.weapons[1].weapon_id) && IsPapWeapon(self.weapons[2].weapon_id)) {
+			GiveAchievement(34, self);
+		}
+	}
 };
 
 //

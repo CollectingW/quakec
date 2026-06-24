@@ -490,6 +490,8 @@ float crandom();
 float isPowerOn;
 float num_power_switches;
 float activated_power_switches;
+float first_door_bought;
+float first_downed_player_occurred;
 .float isBuying; // naievil -- used for checking if a perk is being consumed, limits glitching
 .float perks;
 .float perk_delay;
