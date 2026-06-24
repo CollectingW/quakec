@@ -851,7 +851,9 @@ void() PlayerPostThink =
 	if(self.is_spectator)
 		return;
 
+#ifndef FTE
 	// Town lava floor burns the player: 5 HP/sec + flame SFX while standing on it
+	// (isonlava is a quakespasm/Switch engine builtin #511; not available on FTE)
 	if (!self.downed && self.health > 0 && isonlava(self.origin))
 	{
 		if (self.lava_dmg_time < time)
@@ -861,6 +863,7 @@ void() PlayerPostThink =
 			DamageHandler(self, self, 5, DMG_TYPE_FLAMETHROWER);
 		}
 	}
+#endif
 
 	//landsound
 	if((self.oldvelocity_z < -212) && (self.flags & FL_ONGROUND))
