@@ -2007,7 +2007,10 @@ void () Impulse_Functions =
 			self.has_ads_toggle = true;
 			break;
 		case 33:
-			W_PrimeBetty();
+			if (cvar("sv_gamemode") == GAMEMODE_SKULLBALL && (self.skullball_carrying || self.skullball_carrying_b))
+				SkullBall_TryThrow();
+			else
+				W_PrimeBetty();
 			break;
 		case 26:
 		case 30:
