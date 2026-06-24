@@ -57,18 +57,26 @@ entity(entity turret) MG42Turret_FindTarget =
 				vector tc = e.origin + '0 0 16';
 				float d = vlen(tc - muzzle);
 				if (d < bestdist) {
-					// Firing-arc limit: ignore targets outside +/- TURRET_ARC_HALF
-					// of the mount's facing, so it can't spin a full 180 behind it.
-					vector taim = vectoangles(tc - muzzle);
-					float yawdiff = taim_y - turret.turret_rest_y;
-					while (yawdiff > 180)  yawdiff = yawdiff - 360;
-					while (yawdiff < -180) yawdiff = yawdiff + 360;
-
-					if (yawdiff <= TURRET_ARC_HALF && yawdiff >= (0 - TURRET_ARC_HALF)) {
+					if (turret.classname == "technician_turret") {
 						traceline(muzzle, tc, TRUE, turret);
 						if (trace_fraction == 1) {
 							best = e;
 							bestdist = d;
+						}
+					} else {
+						// Firing-arc limit: ignore targets outside +/- TURRET_ARC_HALF
+						// of the mount's facing, so it can't spin a full 180 behind it.
+						vector taim = vectoangles(tc - muzzle);
+						float yawdiff = taim_y - turret.turret_rest_y;
+						while (yawdiff > 180)  yawdiff = yawdiff - 360;
+						while (yawdiff < -180) yawdiff = yawdiff + 360;
+
+						if (yawdiff <= TURRET_ARC_HALF && yawdiff >= (0 - TURRET_ARC_HALF)) {
+							traceline(muzzle, tc, TRUE, turret);
+							if (trace_fraction == 1) {
+								best = e;
+								bestdist = d;
+							}
 						}
 					}
 				}
@@ -107,9 +115,23 @@ void(entity turret, entity targ) MG42Turret_Fire =
 
 	// on kill: award points and force a cooldown (main balance lever)
 	if (prehealth > 0 && targ.health <= 0) {
-		turret.turret_kill_cd = time + TURRET_KILL_COOLDOWN;
-		if (atk.classname == "player")
+		float cd = (turret.classname == "technician_turret") ? 1.0 : TURRET_KILL_COOLDOWN;
+		turret.turret_kill_cd = time + cd;
+		if (atk.classname == "player") {
 			Player_AddScore(atk, TURRET_KILL_SCORE, true);
+			if (mapname == "nzp_kinodertoten") {
+				float tk = cvar("nzp_turret_kills") + 1;
+				cvar_set("nzp_turret_kills", ftos(tk));
+				if (tk == 50) {
+					GiveAchievement(26, atk);
+					centerprint(atk, "Greased Up unlocked!\nTechnician ready in Loadout.");
+				} else if (tk < 50 && tk == floor(tk / 5) * 5) {
+					string s1 = strcat("Greased Up: ", ftos(tk));
+					string s2 = strcat(s1, "/50");
+					centerprint(atk, s2);
+				}
+			}
+		}
 	}
 };
 
@@ -117,6 +139,10 @@ void(entity turret, entity targ) MG42Turret_Fire =
 void() MG42Turret_Active =
 {
 	if (time >= self.turret_endtime) {
+		if (self.classname == "technician_turret") {
+			remove(self);
+			return;
+		}
 		self.turret_phase = 0;
 		self.angles = self.turret_rest;
 		MG42Turret_SendCount(0);
@@ -126,13 +152,15 @@ void() MG42Turret_Active =
 		return;
 	}
 
-	// Update the HUD countdown (cap at DURATION so the warmup shows the full time).
-	float remaining = ceil(self.turret_endtime - time);
-	if (remaining > TURRET_DURATION)
-		remaining = TURRET_DURATION;
-	if (remaining != self.turret_count_sent) {
-		MG42Turret_SendCount(remaining);
-		self.turret_count_sent = remaining;
+	if (self.classname != "technician_turret") {
+		// Update the HUD countdown (cap at DURATION so the warmup shows the full time).
+		float remaining = ceil(self.turret_endtime - time);
+		if (remaining > TURRET_DURATION)
+			remaining = TURRET_DURATION;
+		if (remaining != self.turret_count_sent) {
+			MG42Turret_SendCount(remaining);
+			self.turret_count_sent = remaining;
+		}
 	}
 
 	// Warmup: hold facing forward (calibrating) but hold fire.
@@ -226,4 +254,68 @@ void(vector org, float yaw) MG42Turret_Spawn =
 	t.touch = MG42Turret_Touch;
 	t.turret_phase = 0;
 	t.owner = world;
+};
+
+// technician: place a mini-turret that shoots zombies in a full 360 degrees
+float() Loadout_HasTechnician =
+{
+	return (cvar("nzp_loadout1") == 5 || cvar("nzp_loadout2") == 5 || cvar("nzp_loadout3") == 5);
+};
+
+void() Technician_PlaceTurret =
+{
+	if (self.downed)
+		return;
+
+	if (self.technician_cooldown > time) {
+		float secs = ceil(self.technician_cooldown - time);
+		string msg = strcat("Technician: Cooldown (", ftos(secs));
+		msg = strcat(msg, "s remaining)");
+		centerprint(self, msg);
+		return;
+	}
+
+	// Find the placement spot: directly in front of the player on the floor.
+	makevectors(self.v_angle);
+	vector forward_dir = v_forward;
+	forward_dir_z = 0; // project to horizontal plane
+	forward_dir = normalize(forward_dir);
+
+	vector spawn_org = self.origin + forward_dir * 48;
+	
+	// Trace down to snap to floor
+	traceline(spawn_org + '0 0 32', spawn_org - '0 0 128', TRUE, self);
+	if (trace_fraction < 1)
+		spawn_org = trace_endpos;
+
+	// Spawn the mini-turret!
+	entity t = spawn();
+	t.classname = "technician_turret";
+	setmodel(t, "models/weapons/mg/g_mg.mdl");
+	t.scale = 0.5; // Make it a mini-turret!
+	setorigin(t, spawn_org);
+	
+	// Face the same way the player is facing (yaw)
+	t.angles = [0, self.angles_y, 0];
+	t.turret_rest = t.angles;
+	t.movetype = MOVETYPE_NONE;
+	t.solid = SOLID_TRIGGER;
+	setsize(t, '-20 -20 -32', '20 20 32'); // half size of buyable turret
+	
+	t.owner = self;
+	t.turret_phase = 1;
+	t.turret_warmup_end = time + 1; // 1s warmup
+	t.turret_endtime = time + 120; // 2 minutes duration
+	t.turret_fire_next = 0;
+	t.turret_kill_cd = 0;
+	t.turret_count_sent = -1;
+
+	Sound_PlaySound(t, "sounds/weapons/mg42/charge.wav", SOUND_TYPE_WEAPON_OTHER, SOUND_PRIORITY_PLAYALWAYS);
+
+	t.think = MG42Turret_Active;
+	t.nextthink = time + 0.05;
+
+	// Set player cooldown: 5 minutes (300 seconds)
+	self.technician_cooldown = time + 300;
+	centerprint(self, "Technician: Mini-turret Placed!");
 };

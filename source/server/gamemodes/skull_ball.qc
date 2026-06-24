@@ -376,8 +376,21 @@ void() Thrall_Think =
 		self.angles_y = vectoyaw(tgt.origin - self.origin);
 		DamageHandler(tgt, self, 100000, DMG_TYPE_ZOMBIESWIPE);
 		Zombie_PlaySoundType(ZOMBIE_SOUND_TYPE_MELEE);
-		if (self.owner != world && self.owner.classname == "player")
+		if (self.owner != world && self.owner.classname == "player") {
 			Player_AddScore(self.owner, SB_THRALL_KILL_PTS, false);
+			if (cvar("sv_gamemode") == GAMEMODE_SKULLBALL) {
+				float thk = cvar("nzp_thrall_kills") + 1;
+				cvar_set("nzp_thrall_kills", ftos(thk));
+				if (thk == 100) {
+					GiveAchievement(28, self.owner);
+					centerprint(self.owner, "No Strings Attached unlocked!\nPuppeteer ready in Loadout.");
+				} else if (thk < 100 && thk == floor(thk / 10) * 10) {
+					string s1 = strcat("No Strings Attached: ", ftos(thk));
+					string s2 = strcat(s1, "/100");
+					centerprint(self.owner, s2);
+				}
+			}
+		}
 
 		// "Traitor" -- a thrall kills its own kind for the first time
 		if (!skullball_traitor_done) {

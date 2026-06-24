@@ -247,6 +247,52 @@ float() Loadout_HasScavenger =
 	return (cvar("nzp_loadout1") == 1 || cvar("nzp_loadout2") == 1 || cvar("nzp_loadout3") == 1);
 };
 
+float() Loadout_HasPuppeteer =
+{
+	return (cvar("nzp_loadout1") == 4 || cvar("nzp_loadout2") == 4 || cvar("nzp_loadout3") == 4);
+};
+
+float() Loadout_HasMedical =
+{
+	return (cvar("nzp_loadout1") == 6 || cvar("nzp_loadout2") == 6 || cvar("nzp_loadout3") == 6);
+};
+
+void(vector org, entity master) Thrall_Spawn; // prototype from skull_ball.qc
+
+void(entity player, vector spawn_org) Puppeteer_OnKill =
+{
+	if (player.classname != "player")
+		return;
+	if (!Loadout_HasPuppeteer())
+		return;
+	if (random() >= 0.01) // 1% chance proc
+		return;
+
+	// snap spawn location to floor
+	traceline(spawn_org + '0 0 32', spawn_org - '0 0 128', TRUE, world);
+	if (trace_fraction < 1)
+		spawn_org = trace_endpos;
+
+	Thrall_Spawn(spawn_org, player);
+	centerprint(player, "Puppeteer active: Spawned Thrall!");
+	Sound_PlaySound(player, "sounds/pu/drop.wav", SOUND_TYPE_ENV_OBJECT, SOUND_PRIORITY_PLAYALWAYS);
+};
+
+void(entity player) Medical_OnKill =
+{
+	if (player.classname != "player")
+		return;
+	if (!Loadout_HasMedical())
+		return;
+	if (random() >= 0.05) // 5% chance
+		return;
+
+	player.health = player.max_health;
+	centerprint(player, "Medical: Health Restored!");
+	Sound_PlaySound(player, "sounds/pu/pickup.wav", SOUND_TYPE_ENV_OBJECT, SOUND_PRIORITY_PLAYALWAYS);
+};
+
+
 float() Scavenger_Chance =
 {
 	float lvl = cvar("nzp_scav_level");
@@ -357,6 +403,12 @@ void(entity attacker, float d_style) DieHandler =
 
 		// Scavenger loadout perk: chance to drop a spare mag to the killer.
 		Scavenger_OnKill(attacker);
+
+		// Puppeteer loadout perk: 1% chance to spawn a thrall.
+		Puppeteer_OnKill(attacker, self.origin);
+
+		// Medical loadout perk: 5% chance to fully heal the player.
+		Medical_OnKill(attacker);
 
 		// "Packed Or Nothing": 1000 kills with a Pack-a-Punched weapon (any gamemode).
 		if (attacker.weapons[0].weapon_tier >= 1) {
@@ -476,6 +528,10 @@ void(entity victim, entity attacker, float damage, float d_style) DamageHandler 
 		victim.ach_tracker_abst = 1;
 		
 		victim.health -= damage;
+
+		if (attacker.classname == "ai_zombie" || attacker.classname == "ai_dog") {
+			victim.medical_took_hit = true;
+		}
 
 		// Determine how long to wait before regenerating based on our Health ratio
 		float ratio = victim.health / victim.max_health;

@@ -796,3 +796,10 @@ float(float current_speed) Gamemode_SkullBall_GetCarrierSpeed;
 .float is_butcher;		// Skull Ball: this zombie is the promoted "Butcher" miniboss
 .float butcher_invuln;		// Skull Ball: Butcher is invincible until this time (spawn protection)
 .float butcher_hp;		// Skull Ball: Butcher's intended max health (restored during invuln)
+
+// Defensive loadout perks: Technician & Medical
+.float technician_cooldown;
+.entity technician_turret;
+.float medical_took_hit;
+
+void(float achievement_id, optional entity who) GiveAchievement;

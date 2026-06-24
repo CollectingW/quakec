@@ -947,6 +947,19 @@ void() PlayerPostThink =
 		if (self.max_health <= self.health) {
 			self.health = self.max_health;
 			self.health_was_very_low = false;
+			if (self.medical_took_hit) {
+				self.medical_took_hit = false;
+				float sh = cvar("nzp_survived_hits") + 1;
+				cvar_set("nzp_survived_hits", ftos(sh));
+				if (sh == 50) {
+					GiveAchievement(27, self);
+					centerprint(self, "Callused Skin unlocked!\nMedical ready in Loadout.");
+				} else if (sh < 50 && sh == floor(sh / 5) * 5) {
+					string s1 = strcat("Callused Skin: ", ftos(sh));
+					string s2 = strcat(s1, "/50");
+					centerprint(self, s2);
+				}
+			}
 		}
 	}
 
