@@ -852,10 +852,8 @@ void() PlayerPostThink =
 		return;
 
 #ifndef FTE
-	// Town lava floor burns the player: 5 HP/sec + flame SFX while standing on it.
-	// Pass the FEET point (bbox bottom) so it only triggers when actually on the lava
-	// plane, not when above it on stairs/platforms. isonlava = engine builtin #511 (no FTE).
-	if (!self.downed && self.health > 0)
+	// lava burn off by default (sv_lava_damage 1); isonlava false-positives
+	if (cvar("sv_lava_damage") && !self.downed && self.health > 0)
 	{
 		vector lava_feet = self.origin;
 		lava_feet_z = self.absmin_z;
